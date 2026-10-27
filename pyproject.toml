@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "quantparity"
+description = "Independent reference engine to validate pricers and risk models, cross-checked against QuantLib."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+keywords = ["quant", "finance", "pricing", "risk", "quantlib", "frtb", "var"]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Topic :: Office/Business :: Financial",
+  "Intended Audience :: Financial and Insurance Industry",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+validation = ["QuantLib==1.44"]
+
+[project.urls]
+Repository = "https://github.com/secke/quantparity"
+
+[tool.maturin]
+manifest-path = "crates/quantparity-py/Cargo.toml"
+python-source = "python"
+module-name = "quantparity._core"
+features = ["pyo3/extension-module"]

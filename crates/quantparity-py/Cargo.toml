@@ -1,0 +1,18 @@
+[package]
+name = "quantparity-py"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+quantparity = { path = "../quantparity" }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
+pythonize = "0.25"
+serde.workspace = true
+serde_json.workspace = true

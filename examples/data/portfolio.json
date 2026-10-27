@@ -1,0 +1,13 @@
+{
+  "trades": [
+    {"id": "EQ-SX5E-C", "underlying": "SX5E", "quantity": 200, "product": "european_option", "option_type": "call", "spot": 5050, "strike": 5200, "rate": 0.022, "dividend": 0.03, "vol": 0.18, "maturity": 1.0},
+    {"id": "EQ-SX5E-P", "underlying": "SX5E", "quantity": -300, "product": "european_option", "option_type": "put", "spot": 5050, "strike": 4800, "rate": 0.022, "dividend": 0.03, "vol": 0.21, "maturity": 0.5},
+    {"id": "EQ-CAC-C", "underlying": "CAC40", "quantity": 150, "product": "european_option", "option_type": "call", "spot": 7600, "strike": 8000, "rate": 0.022, "dividend": 0.028, "vol": 0.17, "maturity": 2.0},
+    {"id": "EQ-CAC-P", "underlying": "CAC40", "quantity": 100, "product": "american_option", "option_type": "put", "spot": 7600, "strike": 7400, "rate": 0.022, "dividend": 0.028, "vol": 0.19, "maturity": 1.0, "steps": 200},
+    {"id": "CMD-BRENT-C", "underlying": "BRENT", "quantity": 20000, "product": "black76", "option_type": "call", "forward": 78, "strike": 85, "rate": 0.022, "vol": 0.32, "maturity": 0.75},
+    {"id": "IR-PAY-10Y", "product": "vanilla_swap", "notional": 50000000, "fixed_rate": 0.0274, "tenor": "10Y", "pay_fixed": true, "forward_curve": "EUR-6M"},
+    {"id": "IR-REC-5Y", "product": "vanilla_swap", "notional": 30000000, "fixed_rate": 0.0255, "tenor": "5Y", "pay_fixed": false, "forward_curve": "EUR-6M"},
+    {"id": "IR-PAY-30Y", "product": "vanilla_swap", "notional": 10000000, "fixed_rate": 0.0290, "tenor": "30Y", "pay_fixed": true, "forward_curve": "EUR-6M"},
+    {"id": "BD-OAT-10Y", "underlying": "OAT", "quantity": 100000, "product": "fixed_rate_bond", "coupon_rate": 0.03, "maturity": 10, "frequency": 1, "yield_rate": 0.031}
+  ]
+}

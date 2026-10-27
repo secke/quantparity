@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "Equity crash (March 2020)",
+      "limit": 3000000,
+      "shifts": {
+        "SPOT:SX5E": -0.3,
+        "SPOT:CAC40": -0.3,
+        "VOL:SX5E": 0.2,
+        "VOL:CAC40": 0.2,
+        "CURVE:EUR-ESTR": -50,
+        "CURVE:EUR-6M": -50,
+        "YIELD:OAT": -30
+      }
+    },
+    {
+      "name": "Rate shock (2022)",
+      "limit": 3000000,
+      "shifts": {
+        "CURVE:EUR-ESTR": 150,
+        "CURVE:EUR-6M": 160,
+        "YIELD:OAT": 180,
+        "SPOT:SX5E": -0.1,
+        "SPOT:CAC40": -0.1
+      }
+    },
+    {
+      "name": "Sovereign crisis",
+      "limit": 1500000,
+      "shifts": {
+        "YIELD:OAT": 250,
+        "SPOT:CAC40": -0.15,
+        "SPOT:SX5E": -0.12,
+        "VOL:CAC40": 0.1,
+        "VOL:SX5E": 0.08
+      }
+    },
+    {
+      "name": "Oil +60%",
+      "limit": 1000000,
+      "shifts": {
+        "SPOT:BRENT": 0.6,
+        "VOL:BRENT": 0.15,
+        "SPOT:SX5E": -0.05,
+        "SPOT:CAC40": -0.05
+      }
+    },
+    {
+      "name": "Curve steepening",
+      "limit": 1500000,
+      "shifts": {
+        "CURVE:EUR-6M:2Y": -40,
+        "CURVE:EUR-6M:5Y": -10,
+        "CURVE:EUR-6M:10Y": 30,
+        "CURVE:EUR-6M:30Y": 60
+      }
+    }
+  ]
+}

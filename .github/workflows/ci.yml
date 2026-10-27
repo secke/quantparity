@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test -p quantparity
+      - run: cargo doc -p quantparity --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pip install maturin pytest
+      - run: maturin build --release --out dist
+      - run: pip install dist/*.whl
+      - run: pytest -q tests
+
+  quantlib-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pip install maturin QuantLib==1.44
+      - run: maturin build --release --out dist && pip install dist/*.whl
+      - run: python validation/validate_quantlib.py --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validation-results
+          path: validation/RESULTS.md

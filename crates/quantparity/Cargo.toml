@@ -1,0 +1,16 @@
+[package]
+name = "quantparity"
+description = "Independent reference engine to validate pricers and risk models: options, multi-curve swaps, VaR/ES, FRTB PLA, backtesting. Cross-checked against QuantLib."
+keywords = ["quant", "finance", "pricing", "risk", "quantlib"]
+categories = ["finance", "mathematics"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

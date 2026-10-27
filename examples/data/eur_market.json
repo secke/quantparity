@@ -1,0 +1,37 @@
+{
+  "as_of": "2026-01-13",
+  "curves": {
+    "EUR-ESTR": {
+      "kind": "ois",
+      "calendar": "target",
+      "settlement_days": 2,
+      "day_count": "act/360",
+      "instruments": [
+        {"tenor": "1M", "rate": 0.01905}, {"tenor": "3M", "rate": 0.01912}, {"tenor": "6M", "rate": 0.01921},
+        {"tenor": "1Y", "rate": 0.01945}, {"tenor": "2Y", "rate": 0.02008}, {"tenor": "3Y", "rate": 0.02079},
+        {"tenor": "5Y", "rate": 0.02215}, {"tenor": "7Y", "rate": 0.02338}, {"tenor": "10Y", "rate": 0.02482},
+        {"tenor": "15Y", "rate": 0.02615}, {"tenor": "20Y", "rate": 0.02655}, {"tenor": "30Y", "rate": 0.02571}
+      ]
+    },
+    "EUR-6M": {
+      "kind": "ibor",
+      "discount_curve": "EUR-ESTR",
+      "calendar": "target",
+      "settlement_days": 2,
+      "index_tenor": "6M",
+      "float_day_count": "act/360",
+      "fixed_frequency": 1,
+      "fixed_day_count": "30/360",
+      "convention": "modified_following",
+      "instruments": [
+        {"type": "deposit", "tenor": "6M", "rate": 0.02185},
+        {"type": "swap", "tenor": "1Y", "rate": 0.02212}, {"type": "swap", "tenor": "2Y", "rate": 0.02263},
+        {"type": "swap", "tenor": "3Y", "rate": 0.02341}, {"type": "swap", "tenor": "4Y", "rate": 0.02418},
+        {"type": "swap", "tenor": "5Y", "rate": 0.02489}, {"type": "swap", "tenor": "7Y", "rate": 0.02611},
+        {"type": "swap", "tenor": "10Y", "rate": 0.02742}, {"type": "swap", "tenor": "12Y", "rate": 0.02803},
+        {"type": "swap", "tenor": "15Y", "rate": 0.02869}, {"type": "swap", "tenor": "20Y", "rate": 0.02905},
+        {"type": "swap", "tenor": "25Y", "rate": 0.02878}, {"type": "swap", "tenor": "30Y", "rate": 0.02831}
+      ]
+    }
+  }
+}
