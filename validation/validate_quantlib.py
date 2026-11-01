@@ -1,6 +1,6 @@
 """Cross-checks quantparity against QuantLib on parameter grids and writes validation/RESULTS.md.
 
-    pip install quantparity QuantLib==1.44
+    pip install quantparity QuantLib==1.44 scipy
     python validation/validate_quantlib.py
 
 Every number in the README comes from this script. It is deterministic.
@@ -13,6 +13,8 @@ import sys
 import time
 
 import QuantLib as ql
+import random
+from scipy import integrate, stats
 
 import quantparity as qp
 
@@ -198,7 +200,97 @@ for tenor, k, pay in itertools.product([1, 2, 3, 5, 7, 10, 15, 20, 30], [0.015, 
 record("Euribor 6M swap, €STR discounting", "NPV (10M notional, EUR)", npv, "SwapRateHelper + DiscountingSwapEngine", limit=1e-5)
 record("Euribor 6M swap, €STR discounting", "par rate", par, "")
 
-# ------------------------------------------------------------------ 7. Speed
+# ------------------------------------------------------------------ 7. VaR / ES models and the ES backtest
+P_GRID = [1e-8, 1e-5, 1e-3, 0.01, 0.025, 0.05, 0.2, 0.5, 0.8, 0.95, 0.975, 0.99, 0.999, 1 - 1e-5]
+ql_inv = ql.InverseCumulativeNormal()
+record("Normal distribution", "quantile", [(qp.norm_inv(p), ql_inv(p)) for p in P_GRID],
+       "InverseCumulativeNormal: Acklam without refinement, ~1e-9", limit=1e-8)
+record("Normal distribution", "quantile (scipy)", [(qp.norm_inv(p), stats.norm.ppf(p)) for p in P_GRID],
+       "scipy.stats.norm.ppf", limit=1e-13)
+NUS = [3, 4, 5, 6, 8, 10, 30]
+t_q, t_c = [], []
+for nu in NUS:
+    inv, cdf = ql.InverseCumulativeStudent(nu, 1e-15, 500), ql.CumulativeStudentDistribution(nu)
+    for p in P_GRID[2:-1]:
+        t_q.append((qp.t_inv(p, nu), inv(p)))
+        x = qp.t_inv(p, nu)
+        t_c.append((qp.t_cdf(x, nu), cdf(x)))
+record("Student-t, 3 to 30 degrees of freedom", "quantile", t_q, "InverseCumulativeStudent (accuracy 1e-15)", limit=1e-10)
+record("Student-t, 3 to 30 degrees of freedom", "cdf", t_c, "CumulativeStudentDistribution", limit=1e-12)
+
+
+def es_reference(pdf, q, e):
+    """ES at level e of a density, by numerical integration: -E[X | X < q] with P(X < q) = 1 - e."""
+    return -integrate.quad(lambda x: x * pdf(x), -math.inf, q, epsabs=0, epsrel=1e-13, limit=200)[0] / (1 - e)
+
+
+ret = [0.0] * 1500
+rng, s2 = random.Random(7), 1e-4
+inv5 = ql.InverseCumulativeStudent(5, 1e-15, 500)
+for i in range(1500):  # GARCH(1,1) with unit-variance t5 innovations
+    ret[i] = math.sqrt(s2) * inv5(rng.random()) * math.sqrt(3 / 5)
+    s2 = 2e-6 + 0.08 * ret[i] ** 2 + 0.9 * s2
+mult = []
+for e in [0.975, 0.99]:
+    f = qp.var_forecasts(ret[:100], es_confidence=e)
+    nd = ql.NormalDistribution()
+    mult.append((f["multipliers"][1], es_reference(nd, stats.norm.ppf(1 - e), e)))
+    for nu in NUS:
+        c = math.sqrt((nu - 2) / nu)
+        f = qp.var_forecasts(ret[:100], es_confidence=e, innovations="t", nu=nu)
+        sd = ql.StudentDistribution(nu)
+        inv = ql.InverseCumulativeStudent(nu, 1e-15, 500)
+        mult.append((f["multipliers"][1], c * es_reference(sd, inv(1 - e), e)))
+record("Expected shortfall, normal and Student-t", "ES multiplier (97.5%, 99%)", mult,
+       "QuantLib densities integrated with scipy.integrate.quad (normal bound: scipy quantile)", limit=1e-10)
+
+# EWMA and filtered historical simulation, recomputed independently
+LAM, W = 0.94, 30
+sig, v = [], sum(x * x for x in ret[:W]) / W
+for x in ret[W:]:
+    sig.append(math.sqrt(v))
+    v = LAM * v + (1 - LAM) * x * x
+f = qp.var_forecasts(ret, innovations="t", nu=5)
+c = math.sqrt(3 / 5)
+record("EWMA VaR / ES forecasts, t5", "VaR 99%", [(a, s * c * inv5(0.99)) for a, s in zip(f["var"], sig)],
+       "RiskMetrics recursion in Python, InverseCumulativeStudent", limit=1e-14)
+fhs = qp.var_forecasts(ret, innovations="fhs", min_residuals=250)
+ref_var, ref_es = [], []
+z = [ret[t] / sig[t - W] for t in range(W, len(ret))]
+for t in range(W + 250, len(ret)):
+    past = sorted(z[: t - W])
+    k = math.ceil(len(past) * 0.01 - 1e-9)
+    ke = math.ceil(len(past) * 0.025 - 1e-9)
+    ref_var.append(-sig[t - W] * past[k - 1])
+    ref_es.append(-sig[t - W] * sum(past[:ke]) / ke)
+record("Filtered historical simulation", "VaR 99%", list(zip(fhs["var"], ref_var)), "sorted past residuals in Python", limit=1e-15)
+record("Filtered historical simulation", "ES 97.5%", list(zip(fhs["es"], ref_es)), "", limit=1e-15)
+# Acerbi-Székely Z1 and Z2 on the EWMA-normal forecasts
+f = qp.var_forecasts(ret)
+real = ret[f["start"]:]
+hits = [(r, e) for r, q, e in zip(real, f["es_var"], f["es"]) if r < -q]
+z2 = sum(r / e for r, e in hits) / (len(real) * 0.025) + 1
+z1 = sum(r / e for r, e in hits) / len(hits) + 1
+b = qp.es_backtest(real, f["es_var"], f["es"], 0.975)
+record("Expected shortfall backtest (Acerbi-Székely)", "Z1, Z2", [(b["z1"], z1), (b["z2"], z2)],
+       f"formulas of the 2014 paper; {len(hits)} exceptions in {len(real)} days", limit=1e-13)
+
+# Size of the Z2 test on 250 days when the forecasts are right: the thresholds -0.70 and -1.8 of
+# Acerbi and Székely should reject about 5% and 0.01% of the samples.
+z2_size = []
+for label, nu in [("normal", None), ("Student-t 3", 3), ("Student-t 5", 5), ("Student-t 10", 10)]:
+    rng = random.Random(11)
+    draw = ql_inv if nu is None else ql.InverseCumulativeStudent(nu, 1e-15, 500)
+    scale = 1.0 if nu is None else math.sqrt((nu - 2) / nu)
+    f = qp.var_forecasts([0.01, -0.01] * 20, es_confidence=0.975, innovations="normal" if nu is None else "t", nu=nu)
+    m = f["multipliers"]
+    z2s = []
+    for _ in range(4000):
+        x = [scale * draw(min(max(rng.random(), 1e-12), 1 - 1e-12)) for _ in range(250)]
+        z2s.append(qp.es_backtest(x, [m[2]] * 250, [m[1]] * 250, 0.975)["z2"])
+    z2_size.append((label, sum(z < -0.70 for z in z2s) / len(z2s), sum(z < -1.8 for z in z2s) / len(z2s)))
+
+# ------------------------------------------------------------------ 8. Speed
 trades = json.loads((ROOT / "examples/data/portfolio.json").read_text())
 hist = (ROOT / "examples/data/factor_history.csv").read_text().strip().splitlines()
 cols = hist[0].split(",")[1:]
@@ -234,6 +326,17 @@ lines += [
     "|---:|---:|---:|",
 ]
 lines += [f"| {n} | {a:+.2e} | {b:+.2e} |" for n, a, b in conv]
+lines += [
+    "",
+    "## Expected shortfall backtest: size of the Z2 test",
+    "",
+    "4,000 samples of 250 days drawn from the forecast distribution itself (the ES is right).",
+    "Acerbi and Székely (2014) give -0.70 as the 5% threshold and -1.8 as the 0.01% threshold.",
+    "",
+    "| Distribution | P(Z2 < -0.70) | P(Z2 < -1.8) |",
+    "|---|---:|---:|",
+]
+lines += [f"| {label} | {a:.1%} | {b:.2%} |" for label, a, b in z2_size]
 lines += [
     "",
     "## Full revaluation speed",

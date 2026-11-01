@@ -15,8 +15,10 @@ from ._core import (  # noqa: F401
     compare,
     crr,
     discrimination,
+    es_backtest,
     implied_vol,
     kupiec,
+    norm_inv,
     pla_test,
     pnl_attribution,
     position_values,
@@ -25,9 +27,12 @@ from ._core import (  # noqa: F401
     revalue,
     sensitivities,
     stress,
+    t_cdf,
+    t_inv,
     traffic_light,
     var_backtest,
     var_es,
+    var_forecasts,
 )
 
 __all__ = [n for n in dir() if not n.startswith("_")] + ["__version__"]

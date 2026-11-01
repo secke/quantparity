@@ -8,7 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pythonize::{depythonize, pythonize};
-use quantparity::{self as qp, benchmark, curves, risk, validation, OptionType};
+use quantparity::{self as qp, benchmark, curves, risk, stats, validation, var_models, OptionType};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -390,6 +390,75 @@ fn var_backtest(py: Python<'_>, realized: Vec<f64>, var: Vec<f64>, alpha: f64) -
     )
 }
 
+/// Expected shortfall backtest (Acerbi-Székely Z1 and Z2): `es_var[t]` is the VaR at the ES
+/// confidence level and `es[t]` the ES forecast for `realized[t]`, as positive losses.
+#[pyfunction]
+#[pyo3(signature = (realized, es_var, es, confidence=0.975))]
+fn es_backtest(
+    py: Python<'_>,
+    realized: Vec<f64>,
+    es_var: Vec<f64>,
+    es: Vec<f64>,
+    confidence: f64,
+) -> PyResult<PyObject> {
+    to_py(
+        py,
+        &need(
+            validation::es_backtest(&realized, &es_var, &es, confidence),
+            "es_backtest",
+        )?,
+    )
+}
+
+// ---------------------------------------------------------------- VaR / ES models
+
+/// One-day VaR and ES forecasts. `innovations`: `"normal"`, `"t"` (Student-t with `nu` degrees
+/// of freedom, unit variance) or `"fhs"` (filtered historical simulation on the latest `window`
+/// standardized returns, all of them if `None`, once `min_residuals` are available).
+#[pyfunction]
+#[pyo3(signature = (returns, lambda_=0.94, warmup=30, var_confidence=0.99, es_confidence=0.975, innovations="normal", nu=None, window=None, min_residuals=250))]
+fn var_forecasts(
+    py: Python<'_>,
+    returns: Vec<f64>,
+    lambda_: f64,
+    warmup: usize,
+    var_confidence: f64,
+    es_confidence: f64,
+    innovations: &str,
+    nu: Option<f64>,
+    window: Option<usize>,
+    min_residuals: usize,
+) -> PyResult<PyObject> {
+    let innov = match innovations {
+        "normal" => var_models::Innovations::Normal,
+        "t" => var_models::Innovations::StudentT {
+            nu: need(nu, "nu (degrees of freedom of the Student-t)")?,
+        },
+        "fhs" => var_models::Innovations::Filtered { window, min_residuals },
+        other => return Err(err(format!("innovations: 'normal', 't' or 'fhs' (got '{other}')"))),
+    };
+    let f = var_models::var_forecasts(&returns, lambda_, warmup, var_confidence, es_confidence, innov).map_err(err)?;
+    to_py(py, &f)
+}
+
+/// Quantile of the standard normal distribution.
+#[pyfunction]
+fn norm_inv(p: f64) -> f64 {
+    stats::norm_inv(p)
+}
+
+/// Quantile of Student's t distribution with `nu` degrees of freedom.
+#[pyfunction]
+fn t_inv(p: f64, nu: f64) -> f64 {
+    stats::t_inv(p, nu)
+}
+
+/// Cumulative distribution function of Student's t distribution.
+#[pyfunction]
+fn t_cdf(x: f64, nu: f64) -> f64 {
+    stats::t_cdf(x, nu)
+}
+
 /// Population Stability Index with bins from reference quantiles.
 #[pyfunction]
 #[pyo3(signature = (expected, actual, bins=10))]
@@ -447,6 +516,11 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(christoffersen, m)?)?;
     m.add_function(wrap_pyfunction!(traffic_light, m)?)?;
     m.add_function(wrap_pyfunction!(var_backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(es_backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(var_forecasts, m)?)?;
+    m.add_function(wrap_pyfunction!(norm_inv, m)?)?;
+    m.add_function(wrap_pyfunction!(t_inv, m)?)?;
+    m.add_function(wrap_pyfunction!(t_cdf, m)?)?;
     m.add_function(wrap_pyfunction!(psi, m)?)?;
     m.add_function(wrap_pyfunction!(discrimination, m)?)?;
     m.add_function(wrap_pyfunction!(calibration, m)?)?;

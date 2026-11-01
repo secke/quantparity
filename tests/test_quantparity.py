@@ -122,3 +122,25 @@ def test_psi_and_credit():
     default = [i >= 50 for i in range(100)]
     d = qp.discrimination(score, default)
     assert d["auc"] == pytest.approx(1.0) and d["gini"] == pytest.approx(1.0)
+
+
+def test_var_es_models_and_es_backtest():
+    assert qp.norm_inv(0.99) == pytest.approx(2.3263478740408408, abs=1e-15)
+    assert qp.t_inv(0.99, 5) == pytest.approx(3.364929998907218, abs=1e-13)
+    assert qp.t_cdf(qp.t_inv(0.025, 4), 4) == pytest.approx(0.025, abs=1e-15)
+    returns = [0.012 * math.sin(i * 1.7) * (3 if i % 53 == 0 else 1) for i in range(700)]
+    normal = qp.var_forecasts(returns)
+    t5 = qp.var_forecasts(returns, innovations="t", nu=5)
+    fhs = qp.var_forecasts(returns, innovations="fhs", min_residuals=250)
+    assert (normal["model"], t5["model"], fhs["model"]) == ("ewma-normal", "ewma-t", "fhs")
+    assert normal["sigma"] == t5["sigma"] and fhs["start"] == 280
+    # Same volatility, fatter tail: higher VaR 99% and ES
+    assert all(b > a for a, b in zip(normal["var"], t5["var"]))
+    assert all(b > a for a, b in zip(normal["es"], t5["es"]))
+    r = returns[normal["start"]:]
+    b = qp.es_backtest(r, normal["es_var"], normal["es"], 0.975)
+    assert b["observations"] == len(r) and b["zone"] in ("green", "yellow", "red")
+    with pytest.raises(ValueError):
+        qp.var_forecasts(returns, innovations="t")
+    with pytest.raises(ValueError):
+        qp.var_forecasts(returns, innovations="t", nu=2)

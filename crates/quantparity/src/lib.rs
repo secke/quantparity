@@ -8,8 +8,10 @@
 //! - **Benchmarking**: compare a candidate pricer to the reference with per-product tolerances.
 //! - **Market risk**: factor shocks, full revaluation, historical VaR/ES, bucketed sensitivities,
 //!   stress tests and the FRTB P&L attribution test (Spearman / Kolmogorov-Smirnov).
+//! - **VaR / ES models**: EWMA volatility with normal or Student-t innovations, filtered
+//!   historical simulation; one-day forecasts of VaR and expected shortfall.
 //! - **Model validation**: Kupiec, Christoffersen, Basel traffic light, PSI, AUC/Gini/KS,
-//!   binomial and Hosmer-Lemeshow calibration tests.
+//!   binomial and Hosmer-Lemeshow calibration tests, Acerbi-Székely expected shortfall backtests.
 //!
 //! Every result is checked against QuantLib in the repository's `validation/` suite.
 
@@ -22,6 +24,7 @@ mod instruments;
 pub mod risk;
 pub mod stats;
 pub mod validation;
+pub mod var_models;
 
 pub use instruments::*;
 

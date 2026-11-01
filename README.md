@@ -26,6 +26,12 @@ Results of [`validation/validate_quantlib.py`](validation/validate_quantlib.py) 
 | Euribor 6M swaps, par rate | 54 | 1.3e-14 |
 | American options, CRR 500 steps | 96 | 1.1e-3 (explained below) |
 | Same tree with QuantLib's probability | 96 | 9.0e-11 |
+| Student-t quantile and cdf, 3 to 30 degrees of freedom | 77 × 2 | 1.4e-13 |
+| Expected shortfall multipliers, normal and Student-t (QuantLib densities, numerical integration) | 16 | 1.4e-12 |
+| EWMA VaR forecasts with t5 innovations | 1,470 | 6.9e-18 |
+| Normal quantile | 14 | 3.4e-9 (QuantLib's own error, 4.2e-15 against scipy) |
+
+The normal quantile gap is QuantLib's: `InverseCumulativeNormal` is Acklam's approximation without a refinement step, accurate to about 1e-9; quantparity refines it and agrees with scipy to 4e-15. Filtered historical simulation and the Acerbi-Székely statistics are recomputed independently in the validation script (gaps of 1e-17 and 2e-15).
 
 The swap NPV gap is two micro-euros on a ten-million notional, after an independent rebuild of TARGET calendars, Modified Following, backward schedules, Act/360 and 30/360 accruals, spot lag, OIS compounding and a two-curve bootstrap.
 
@@ -50,7 +56,8 @@ Replacing only that line in an otherwise identical tree reproduces QuantLib to 9
 | Benchmarking | Compare any candidate pricer to the reference, with per-product absolute and relative tolerances |
 | Market risk | Factor shocks (`SPOT`, `VOL`, `CURVE`, `CURVE:<pillar>`, `YIELD`), full revaluation in parallel with curves re-bootstrapped per scenario, historical VaR and ES, bucketed sensitivities, stress tests with limits |
 | FRTB | P&L attribution test: hypothetical vs risk-theoretical P&L, Spearman correlation and Kolmogorov-Smirnov distance, green/amber/red zones |
-| Model validation | Kupiec, Christoffersen, Basel traffic light, PSI, AUC / Gini / KS, binomial and Hosmer-Lemeshow PD calibration |
+| VaR / ES models | One-day forecasts with an EWMA (RiskMetrics) volatility and normal, unit-variance Student-t or filtered historical simulation innovations (Barone-Adesi, Hull-White): VaR, ES and the VaR at the ES level |
+| Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests, PSI, AUC / Gini / KS, binomial and Hosmer-Lemeshow PD calibration |
 
 ## Install
 
@@ -118,10 +125,27 @@ qp.compare(portfolio, candidate, market, tolerances={"default": {"abs": 1e-6, "r
 qp.kupiec(observations=250, exceptions=12, alpha=0.99)        # proportion of failures, LR and p-value
 qp.traffic_light(250, 7)                                       # {'zone': 'yellow', 'plus_factor': 0.65, ...}
 qp.christoffersen(hits, alpha=0.99)                            # independence of exceptions
+f = qp.var_forecasts(returns, innovations="t", nu=5)           # or "normal", "fhs"; f["var"], f["es"], f["es_var"]
+r = returns[f["start"]:]
+qp.var_backtest(r, f["var"], alpha=0.99)
+qp.es_backtest(r, f["es_var"], f["es"], confidence=0.975)      # Z1, Z2, zone (-0.70 / -1.8)
 qp.psi(reference_scores, current_scores, bins=10)
 qp.discrimination(scores, defaults)                            # AUC, Gini, KS
 qp.calibration(grades, pds, defaults)                          # binomial per grade, Hosmer-Lemeshow
 ```
+
+### Finding: the Z2 thresholds hold down to about 5 degrees of freedom
+
+Acerbi and Székely report that the 5% and 0.01% thresholds of their Z2 test, -0.70 and -1.8 on 250 days, hardly depend on the distribution. The validation script checks this by simulation, with 4,000 samples drawn from the forecast distribution itself:
+
+| Distribution | P(Z2 < -0.70), nominal 5% | P(Z2 < -1.8), nominal 0.01% |
+|---|---:|---:|
+| normal | 4.3% | 0.00% |
+| Student-t 10 | 4.5% | 0.00% |
+| Student-t 5 | 5.0% | 0.03% |
+| Student-t 3 | 6.7% | 0.43% |
+
+With very heavy tails the test rejects a correct model more often than its thresholds say: a red Z2 zone with 3 degrees of freedom happens to a right model about once in 230 windows, not once in 10,000. A Z2 alone is weak evidence for such tails.
 
 ## Rust example
 
@@ -153,9 +177,9 @@ Markets: `{"as_of": "YYYY-MM-DD", "curves": {"<name>": {...}}}`. Curves with `"k
 ## Reproduce
 
 ```bash
-cargo test                                         # 46 Rust tests (Hull, Haug and closed-form values)
+cargo test                                         # 51 Rust tests (Hull, Haug and closed-form values)
 pip install pytest QuantLib==1.44 && pytest tests  # Python API
-python validation/validate_quantlib.py --check     # QuantLib parity, fails above the limits
+pip install scipy && python validation/validate_quantlib.py --check   # QuantLib parity, fails above the limits
 ```
 
 ## Scope
