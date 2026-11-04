@@ -1,6 +1,7 @@
 import json
 import math
 import pathlib
+import random
 
 import pytest
 
@@ -144,3 +145,23 @@ def test_var_es_models_and_es_backtest():
         qp.var_forecasts(returns, innovations="t")
     with pytest.raises(ValueError):
         qp.var_forecasts(returns, innovations="t", nu=2)
+
+
+def test_garch_filter():
+    rng = random.Random(7)
+    s2, returns = 1e-4, []
+    for _ in range(1500):
+        r = math.sqrt(s2) * rng.gauss(0, 1)
+        s2 = 2e-6 + (0.03 + 0.12 * (r < 0)) * r * r + 0.88 * s2
+        returns.append(r)
+    fit = qp.garch_fit(returns, asymmetric=True)
+    p = fit["params"]
+    assert fit["model"] == "gjr" and p["gamma"] > p["alpha"] and fit["persistence"] < 1
+    ll, var = qp.garch_loglik(returns, p["omega"], p["alpha"], p["gamma"], p["beta"], fit["backcast"])
+    assert abs(ll - fit["loglik"]) < 1e-9 and len(var) == len(returns) + 1
+    f = qp.var_forecasts(returns, warmup=500, volatility="gjr", refit=500)
+    assert f["model"] == "gjr-normal" and [x["from"] for x in f["fits"]] == [500, 1000]
+    assert f["fits"][0]["fit"] == qp.garch_fit(returns[:500], asymmetric=True)
+    assert "lambda" not in f and f["volatility"]["kind"] == "garch"
+    with pytest.raises(ValueError):
+        qp.var_forecasts(returns, volatility="egarch")

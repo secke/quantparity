@@ -412,11 +412,14 @@ fn es_backtest(
 
 // ---------------------------------------------------------------- VaR / ES models
 
-/// One-day VaR and ES forecasts. `innovations`: `"normal"`, `"t"` (Student-t with `nu` degrees
+/// One-day VaR and ES forecasts. `volatility`: `"ewma"` (decay `lambda_`), `"garch"` or `"gjr"`
+/// (fitted on the `warmup` first returns, refitted every `refit` days on the latest `fit_window`
+/// returns, all of them if `None`). `innovations`: `"normal"`, `"t"` (Student-t with `nu` degrees
 /// of freedom, unit variance) or `"fhs"` (filtered historical simulation on the latest `window`
 /// standardized returns, all of them if `None`, once `min_residuals` are available).
 #[pyfunction]
-#[pyo3(signature = (returns, lambda_=0.94, warmup=30, var_confidence=0.99, es_confidence=0.975, innovations="normal", nu=None, window=None, min_residuals=250))]
+#[pyo3(signature = (returns, lambda_=0.94, warmup=30, var_confidence=0.99, es_confidence=0.975, innovations="normal", nu=None, window=None, min_residuals=250, volatility="ewma", refit=250, fit_window=None))]
+#[allow(clippy::too_many_arguments)]
 fn var_forecasts(
     py: Python<'_>,
     returns: Vec<f64>,
@@ -428,7 +431,19 @@ fn var_forecasts(
     nu: Option<f64>,
     window: Option<usize>,
     min_residuals: usize,
+    volatility: &str,
+    refit: usize,
+    fit_window: Option<usize>,
 ) -> PyResult<PyObject> {
+    let vol = match volatility {
+        "ewma" => var_models::Volatility::Ewma { lambda: lambda_ },
+        "garch" | "gjr" => var_models::Volatility::Garch {
+            asymmetric: volatility == "gjr",
+            refit,
+            window: fit_window,
+        },
+        other => return Err(err(format!("volatility: 'ewma', 'garch' or 'gjr' (got '{other}')"))),
+    };
     let innov = match innovations {
         "normal" => var_models::Innovations::Normal,
         "t" => var_models::Innovations::StudentT {
@@ -437,8 +452,32 @@ fn var_forecasts(
         "fhs" => var_models::Innovations::Filtered { window, min_residuals },
         other => return Err(err(format!("innovations: 'normal', 't' or 'fhs' (got '{other}')"))),
     };
-    let f = var_models::var_forecasts(&returns, lambda_, warmup, var_confidence, es_confidence, innov).map_err(err)?;
+    let f = var_models::var_forecasts_with(&returns, vol, warmup, var_confidence, es_confidence, innov).map_err(err)?;
     to_py(py, &f)
+}
+
+/// Gaussian quasi-maximum likelihood fit of a GARCH(1,1), or GJR-GARCH(1,1) if `asymmetric`,
+/// with zero mean and the conventions of the `arch` package.
+#[pyfunction]
+#[pyo3(signature = (returns, asymmetric=false))]
+fn garch_fit(py: Python<'_>, returns: Vec<f64>, asymmetric: bool) -> PyResult<PyObject> {
+    to_py(py, &qp::garch::garch_fit(&returns, asymmetric).map_err(err)?)
+}
+
+/// Gaussian log-likelihood and conditional variances (followed by the next-day forecast) of a
+/// GARCH / GJR with the given parameters and backcast.
+#[pyfunction]
+fn garch_loglik(returns: Vec<f64>, omega: f64, alpha: f64, gamma: f64, beta: f64, backcast: f64) -> (f64, Vec<f64>) {
+    let p = qp::garch::GarchParams {
+        omega,
+        alpha,
+        gamma,
+        beta,
+    };
+    (
+        qp::garch::loglik(&returns, &p, backcast),
+        qp::garch::variances(&returns, &p, backcast),
+    )
 }
 
 /// Quantile of the standard normal distribution.
@@ -518,6 +557,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(var_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(es_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(var_forecasts, m)?)?;
+    m.add_function(wrap_pyfunction!(garch_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(garch_loglik, m)?)?;
     m.add_function(wrap_pyfunction!(norm_inv, m)?)?;
     m.add_function(wrap_pyfunction!(t_inv, m)?)?;
     m.add_function(wrap_pyfunction!(t_cdf, m)?)?;

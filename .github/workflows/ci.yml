@@ -46,7 +46,7 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: pip install maturin QuantLib==1.44 scipy
+      - run: pip install maturin QuantLib==1.44 scipy arch==8.0.0
       - run: maturin build --release --out dist && pip install dist/*.whl
       - run: python validation/validate_quantlib.py --check
       - uses: actions/upload-artifact@v4

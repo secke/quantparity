@@ -1,6 +1,6 @@
 """Cross-checks quantparity against QuantLib on parameter grids and writes validation/RESULTS.md.
 
-    pip install quantparity QuantLib==1.44 scipy
+    pip install quantparity QuantLib==1.44 scipy arch==8.0.0
     python validation/validate_quantlib.py
 
 Every number in the README comes from this script. It is deterministic.
@@ -14,6 +14,8 @@ import time
 
 import QuantLib as ql
 import random
+import numpy as np
+from arch import arch_model
 from scipy import integrate, stats
 
 import quantparity as qp
@@ -289,6 +291,59 @@ for label, nu in [("normal", None), ("Student-t 3", 3), ("Student-t 5", 5), ("St
         x = [scale * draw(min(max(rng.random(), 1e-12), 1 - 1e-12)) for _ in range(250)]
         z2s.append(qp.es_backtest(x, [m[2]] * 250, [m[1]] * 250, 0.975)["z2"])
     z2_size.append((label, sum(z < -0.70 for z in z2s) / len(z2s), sum(z < -1.8 for z in z2s) / len(z2s)))
+
+# ------------------------------------------------------------------ 7b. GARCH and GJR-GARCH against arch
+# The reference for volatility models is the Python `arch` package (zero mean, normal likelihood,
+# its default backcast). Its optimizer needs returns of order 1, so it is fitted on 100 r: omega
+# scales by 1e4 and the log-likelihood shifts by n ln 100.
+def simulate_gjr(n, omega, alpha, gamma, beta, seed):
+    rng, s2, out = random.Random(seed), omega / (1 - alpha - gamma / 2 - beta), []
+    for _ in range(n):
+        r = math.sqrt(s2) * rng.gauss(0, 1)
+        s2 = omega + (alpha + gamma * (r < 0)) * r * r + beta * s2
+        out.append(r)
+    return out
+
+
+SAMPLES = [(n, truth, seed) for n in (500, 1000, 2500)
+           for truth in ((2e-6, 0.08, 0.0, 0.9), (2e-6, 0.03, 0.12, 0.88), (1e-5, 0.15, 0.1, 0.7))
+           for seed in (1, 2)]
+var_pairs, ll_fixed, ll_fit, par_fit, worse, ll_raw = [], [], [], [], 0, []
+for n, truth, seed in SAMPLES:
+    y = simulate_gjr(n, *truth, seed)
+    for o in (0, 1):
+        m = arch_model(np.array(y), mean="Zero", vol="GARCH", p=1, o=o, q=1, dist="normal", rescale=False)
+        params = list(truth) if o else [truth[0], truth[1], truth[3]]
+        fixed = m.fix(params)
+        ll, v = qp.garch_loglik(y, truth[0], truth[1], truth[2] if o else 0.0, truth[3], qp.garch_fit(y, bool(o))["backcast"])
+        var_pairs += list(zip(np.sqrt(v[:-1]), fixed.conditional_volatility))
+        ll_fixed.append((ll, fixed.loglikelihood))
+        res = arch_model(100 * np.array(y), mean="Zero", vol="GARCH", p=1, o=o, q=1, dist="normal",
+                         rescale=False).fit(disp="off", options={"ftol": 1e-12, "maxiter": 1000})
+        fit = qp.garch_fit(y, asymmetric=bool(o))
+        a_ll = res.loglikelihood + n * math.log(100)
+        ll_fit.append((fit["loglik"], a_ll))
+        worse += fit["loglik"] < a_ll - 1e-7
+        raw = m.fit(disp="off", show_warning=False)  # the same returns, not rescaled
+        ll_raw.append((fit["loglik"], raw.loglikelihood, raw.convergence_flag))
+        a = res.params.values
+        q = fit["params"]
+        mine = [q["omega"] * 1e4, q["alpha"]] + ([q["gamma"]] if o else []) + [q["beta"]]
+        par_fit += list(zip(mine, a))
+record("GARCH / GJR-GARCH(1,1)", "conditional volatility, given parameters", var_pairs,
+       f"arch {__import__('arch').__version__} ARCHModel.fix, same backcast; {2 * len(SAMPLES)} samples", limit=1e-15)
+record("GARCH / GJR-GARCH(1,1)", "log-likelihood, given parameters", ll_fixed, "", limit=1e-9)
+record("GARCH / GJR-GARCH(1,1)", "log-likelihood at the fitted optimum", ll_fit,
+       f"arch fit on 100 r (SLSQP); quantparity below arch in {worse} of {len(ll_fit)} fits", limit=1e-7)
+record("GARCH / GJR-GARCH(1,1)", "fitted parameters (omega x 1e4, alpha, gamma, beta)", par_fit,
+       "flat likelihood near the optimum: parameters agree to the optimizers' tolerance", limit=1e-4)
+short = sum(a - b > 1e-3 for a, b, _ in ll_raw)
+record("GARCH / GJR-GARCH(1,1)", "log-likelihood, arch fitted on unscaled returns", [(a, b) for a, b, _ in ll_raw],
+       f"arch stops more than 1e-3 short of the optimum in {short} of {len(ll_raw)} fits, and reports "
+       f"convergence in {sum(c == 0 for _, _, c in ll_raw)} of {len(ll_raw)}: a finding, not a quantparity error",
+       limit=math.inf)
+if worse:
+    failures.append(f"GARCH fit: quantparity's optimum below arch's in {worse} fits")
 
 # ------------------------------------------------------------------ 8. Speed
 trades = json.loads((ROOT / "examples/data/portfolio.json").read_text())

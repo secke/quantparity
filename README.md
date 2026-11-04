@@ -30,8 +30,15 @@ Results of [`validation/validate_quantlib.py`](validation/validate_quantlib.py) 
 | Expected shortfall multipliers, normal and Student-t (QuantLib densities, numerical integration) | 16 | 1.4e-12 |
 | EWMA VaR forecasts with t5 innovations | 1,470 | 6.9e-18 |
 | Normal quantile | 14 | 3.4e-9 (QuantLib's own error, 4.2e-15 against scipy) |
+| GARCH / GJR-GARCH(1,1) conditional volatility, given parameters (against `arch`) | 48,000 | 3.5e-18 |
+| GARCH / GJR-GARCH(1,1) fit: log-likelihood at the optimum (against `arch`) | 36 | 1.8e-10 |
+| GARCH / GJR-GARCH(1,1) fit: parameters (ω × 1e4, α, γ, β) | 126 | 7.2e-7 |
 
-The normal quantile gap is QuantLib's: `InverseCumulativeNormal` is Acklam's approximation without a refinement step, accurate to about 1e-9; quantparity refines it and agrees with scipy to 4e-15. Filtered historical simulation and the Acerbi-Székely statistics are recomputed independently in the validation script (gaps of 1e-17 and 2e-15).
+The normal quantile gap is QuantLib's: `InverseCumulativeNormal` is Acklam's approximation without a refinement step, accurate to about 1e-9; quantparity refines it and agrees with scipy to 4e-15. Filtered historical simulation and the Acerbi-Székely statistics are recomputed independently in the validation script (gaps of 1e-17 and 2e-15). The volatility models have no QuantLib counterpart and are reconciled with the Python [`arch`](https://github.com/bashtage/arch) package instead, on 36 simulated samples of 500 to 2,500 days.
+
+### Finding: `arch` needs rescaled returns, and does not say so in its result
+
+Fitted on daily returns of order 0.01, `arch` stops more than 1e-3 short of the likelihood maximum in 33 of the 36 samples, close to its starting values, and still reports convergence in all 36. By default it only emits a `DataScaleWarning` and fits the unscaled data anyway (`rescale=True` fixes it); with `rescale=False` it is silent. Fitted on 100 r, it reaches the same optimum as quantparity to 2e-10. quantparity rescales the returns internally, so the fit does not depend on the unit of the input.
 
 The swap NPV gap is two micro-euros on a ten-million notional, after an independent rebuild of TARGET calendars, Modified Following, backward schedules, Act/360 and 30/360 accruals, spot lag, OIS compounding and a two-curve bootstrap.
 
@@ -56,7 +63,8 @@ Replacing only that line in an otherwise identical tree reproduces QuantLib to 9
 | Benchmarking | Compare any candidate pricer to the reference, with per-product absolute and relative tolerances |
 | Market risk | Factor shocks (`SPOT`, `VOL`, `CURVE`, `CURVE:<pillar>`, `YIELD`), full revaluation in parallel with curves re-bootstrapped per scenario, historical VaR and ES, bucketed sensitivities, stress tests with limits |
 | FRTB | P&L attribution test: hypothetical vs risk-theoretical P&L, Spearman correlation and Kolmogorov-Smirnov distance, green/amber/red zones |
-| VaR / ES models | One-day forecasts with an EWMA (RiskMetrics) volatility and normal, unit-variance Student-t or filtered historical simulation innovations (Barone-Adesi, Hull-White): VaR, ES and the VaR at the ES level |
+| Volatility | GARCH(1,1) and GJR-GARCH(1,1) by Gaussian quasi-maximum likelihood, with the conventions of `arch` |
+| VaR / ES models | One-day forecasts with an EWMA (RiskMetrics), GARCH or GJR volatility, refitted on a rolling or expanding window, and normal, unit-variance Student-t or filtered historical simulation innovations (Barone-Adesi, Hull-White): VaR, ES and the VaR at the ES level |
 | Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests, PSI, AUC / Gini / KS, binomial and Hosmer-Lemeshow PD calibration |
 
 ## Install
@@ -126,6 +134,8 @@ qp.kupiec(observations=250, exceptions=12, alpha=0.99)        # proportion of fa
 qp.traffic_light(250, 7)                                       # {'zone': 'yellow', 'plus_factor': 0.65, ...}
 qp.christoffersen(hits, alpha=0.99)                            # independence of exceptions
 f = qp.var_forecasts(returns, innovations="t", nu=5)           # or "normal", "fhs"; f["var"], f["es"], f["es_var"]
+g = qp.var_forecasts(returns, volatility="gjr", warmup=500, refit=250, innovations="fhs")  # f["fits"]
+qp.garch_fit(returns, asymmetric=True)                         # omega, alpha, gamma, beta, loglik
 r = returns[f["start"]:]
 qp.var_backtest(r, f["var"], alpha=0.99)
 qp.es_backtest(r, f["es_var"], f["es"], confidence=0.975)      # Z1, Z2, zone (-0.70 / -1.8)

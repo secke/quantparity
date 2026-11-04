@@ -8,18 +8,20 @@
 //! - **Benchmarking**: compare a candidate pricer to the reference with per-product tolerances.
 //! - **Market risk**: factor shocks, full revaluation, historical VaR/ES, bucketed sensitivities,
 //!   stress tests and the FRTB P&L attribution test (Spearman / Kolmogorov-Smirnov).
-//! - **VaR / ES models**: EWMA volatility with normal or Student-t innovations, filtered
-//!   historical simulation; one-day forecasts of VaR and expected shortfall.
+//! - **VaR / ES models**: EWMA, GARCH or GJR-GARCH volatility with normal or Student-t
+//!   innovations, filtered historical simulation; one-day forecasts of VaR and expected shortfall.
 //! - **Model validation**: Kupiec, Christoffersen, Basel traffic light, PSI, AUC/Gini/KS,
 //!   binomial and Hosmer-Lemeshow calibration tests, Acerbi-Székely expected shortfall backtests.
 //!
-//! Every result is checked against QuantLib in the repository's `validation/` suite.
+//! Every result is checked against QuantLib (and the volatility models against the Python `arch`
+//! package) in the repository's `validation/` suite.
 
 use serde::{Deserialize, Serialize};
 
 pub mod benchmark;
 pub mod curves;
 pub mod dates;
+pub mod garch;
 mod instruments;
 pub mod risk;
 pub mod stats;

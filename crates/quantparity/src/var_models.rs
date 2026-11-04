@@ -1,7 +1,8 @@
-//! One-day VaR and expected shortfall forecasts from a return series: RiskMetrics EWMA volatility
-//! with normal or Student-t innovations, and filtered historical simulation (Barone-Adesi, Hull
-//! and White). Every forecast for day t uses the returns up to t-1 only.
+//! One-day VaR and expected shortfall forecasts from a return series: RiskMetrics EWMA, GARCH or
+//! GJR-GARCH volatility with normal or Student-t innovations, and filtered historical simulation
+//! (Barone-Adesi, Hull and White). Every forecast for day t uses the returns up to t-1 only.
 
+use crate::garch::{garch_fit, next_variance, variances, GarchFit};
 use crate::instruments::norm_pdf;
 use crate::stats::{norm_inv, t_inv, t_pdf};
 use serde::{Deserialize, Serialize};
@@ -23,11 +24,40 @@ pub enum Innovations {
     },
 }
 
+/// Volatility filter σ_t.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Volatility {
+    /// RiskMetrics: σ²_t = λ σ²_{t-1} + (1-λ) r²_{t-1}, started from the mean square of the
+    /// warm-up returns.
+    Ewma { lambda: f64 },
+    /// GARCH(1,1), or GJR-GARCH(1,1) if `asymmetric` ([`crate::garch`]), fitted on the warm-up
+    /// returns and refitted every `refit` days on the latest `window` returns (all of them if
+    /// `None`); between refits the variance follows the fitted recursion.
+    Garch {
+        asymmetric: bool,
+        refit: usize,
+        window: Option<usize>,
+    },
+}
+
+/// A GARCH fit used from forecast index `from` (a position in `returns`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FitAt {
+    pub from: usize,
+    pub fit: GarchFit,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VarForecasts {
-    /// `ewma-normal`, `ewma-t` or `fhs`.
+    /// `ewma-normal`, `ewma-t`, `fhs` (EWMA filter), `garch-normal`, `garch-t`, `garch-fhs`,
+    /// `gjr-normal`, `gjr-t` or `gjr-fhs`.
     pub model: String,
-    pub lambda: f64,
+    /// EWMA decay (EWMA filter only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lambda: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volatility: Option<Volatility>,
     pub warmup: usize,
     pub innovations: Innovations,
     pub var_confidence: f64,
@@ -45,6 +75,9 @@ pub struct VarForecasts {
     /// Multipliers of σ for the parametric models (VaR, ES, VaR at the ES level).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multipliers: Option<[f64; 3]>,
+    /// GARCH fits, in the order they are used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fits: Option<Vec<FitAt>>,
 }
 
 /// Quantile and ES multipliers of a unit-variance distribution: (VaR at `a`, ES at `e`, VaR at `e`).
@@ -87,9 +120,75 @@ pub fn var_forecasts(
     es_confidence: f64,
     innovations: Innovations,
 ) -> Result<VarForecasts, String> {
-    if !(0.0..1.0).contains(&lambda) {
-        return Err(format!("lambda = {lambda}: between 0 and 1"));
+    var_forecasts_with(
+        returns,
+        Volatility::Ewma { lambda },
+        warmup,
+        var_confidence,
+        es_confidence,
+        innovations,
+    )
+}
+
+/// σ_t for t = `warmup` … n-1, from the returns before t, and the GARCH fits used.
+fn volatility_path(
+    returns: &[f64],
+    volatility: Volatility,
+    warmup: usize,
+) -> Result<(Vec<f64>, Option<Vec<FitAt>>), String> {
+    let mut sigma = Vec::with_capacity(returns.len() - warmup);
+    match volatility {
+        Volatility::Ewma { lambda } => {
+            if !(0.0..1.0).contains(&lambda) {
+                return Err(format!("lambda = {lambda}: between 0 and 1"));
+            }
+            let mut s2 = returns[..warmup].iter().map(|x| x * x).sum::<f64>() / warmup as f64;
+            for r in &returns[warmup..] {
+                sigma.push(s2.sqrt());
+                s2 = lambda * s2 + (1.0 - lambda) * r * r;
+            }
+            Ok((sigma, None))
+        }
+        Volatility::Garch {
+            asymmetric,
+            refit,
+            window,
+        } => {
+            if refit == 0 || window.is_some_and(|w| w < 100) {
+                return Err("GARCH: refit ≥ 1 and window ≥ 100".into());
+            }
+            let mut fits = vec![];
+            let mut t0 = warmup;
+            while t0 < returns.len() {
+                let lo = window.map_or(0, |w| t0.saturating_sub(w));
+                let fit = garch_fit(&returns[lo..t0], asymmetric)?;
+                let p = fit.params;
+                let mut s2 = *variances(&returns[lo..t0], &p, fit.backcast).last().unwrap();
+                let t1 = (t0 + refit).min(returns.len());
+                for r in &returns[t0..t1] {
+                    sigma.push(s2.sqrt());
+                    s2 = next_variance(&p, s2, *r);
+                }
+                fits.push(FitAt { from: t0, fit });
+                t0 = t1;
+            }
+            Ok((sigma, Some(fits)))
+        }
     }
+}
+
+/// VaR and ES forecasts with any volatility filter: VaR_t = σ_t q_α and ES_t = σ_t ES_e of the
+/// innovations, or the quantiles of the past standardized returns r_s / σ_s for the filtered
+/// simulation. A GARCH filter is fitted by Gaussian quasi-maximum likelihood whatever the
+/// innovations.
+pub fn var_forecasts_with(
+    returns: &[f64],
+    volatility: Volatility,
+    warmup: usize,
+    var_confidence: f64,
+    es_confidence: f64,
+    innovations: Innovations,
+) -> Result<VarForecasts, String> {
     for c in [var_confidence, es_confidence] {
         if !(c > 0.5 && c < 1.0) {
             return Err(format!("confidence level {c}: between 0.5 and 1"));
@@ -101,12 +200,12 @@ pub fn var_forecasts(
     if returns.iter().any(|x| !x.is_finite()) {
         return Err("non-finite return".into());
     }
-    let mut s2 = returns[..warmup].iter().map(|x| x * x).sum::<f64>() / warmup as f64;
-    let mut sigma = Vec::with_capacity(returns.len() - warmup);
-    for r in &returns[warmup..] {
-        sigma.push(s2.sqrt());
-        s2 = lambda * s2 + (1.0 - lambda) * r * r;
-    }
+    let (mut sigma, fits) = volatility_path(returns, volatility, warmup)?;
+    let filter = match volatility {
+        Volatility::Ewma { .. } => "ewma",
+        Volatility::Garch { asymmetric: false, .. } => "garch",
+        Volatility::Garch { asymmetric: true, .. } => "gjr",
+    };
     if sigma.iter().any(|s| *s <= 0.0) {
         return Err("zero volatility: the warm-up returns are all zero".into());
     }
@@ -147,22 +246,32 @@ pub fn var_forecasts(
                 }
             }
             sigma.drain(..min_residuals);
-            ("fhs", start, var, es, es_var, None)
+            let name = if filter == "ewma" {
+                "fhs".to_string()
+            } else {
+                format!("{filter}-fhs")
+            };
+            (name, start, var, es, es_var, None)
         }
         innov => {
             let m = multipliers(innov, var_confidence, es_confidence)?;
             let scale = |k: usize| sigma.iter().map(|s| s * m[k]).collect::<Vec<f64>>();
             let name = if matches!(innov, Innovations::Normal) {
-                "ewma-normal"
+                format!("{filter}-normal")
             } else {
-                "ewma-t"
+                format!("{filter}-t")
             };
             (name, warmup, scale(0), scale(1), scale(2), Some(m))
         }
     };
+    let lambda = match volatility {
+        Volatility::Ewma { lambda } => Some(lambda),
+        _ => None,
+    };
     Ok(VarForecasts {
-        model: model.into(),
+        model,
         lambda,
+        volatility: (lambda.is_none()).then_some(volatility),
         warmup,
         innovations,
         var_confidence,
@@ -173,6 +282,7 @@ pub fn var_forecasts(
         es,
         es_var,
         multipliers: mult,
+        fits,
     })
 }
 
@@ -251,5 +361,52 @@ mod tests {
         z.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let (q, _) = tail(&z, 0.99);
         assert!((g.var[t - 280] - ewma.sigma[t - 30] * q).abs() < 1e-15);
+    }
+
+    #[test]
+    fn garch_filter_refits_on_past_returns_only() {
+        let r = returns(800);
+        let vol = Volatility::Garch {
+            asymmetric: true,
+            refit: 200,
+            window: Some(400),
+        };
+        let f = var_forecasts_with(&r, vol, 300, 0.99, 0.975, Innovations::Normal).unwrap();
+        assert_eq!(
+            (f.model.as_str(), f.start, f.var.len(), f.lambda),
+            ("gjr-normal", 300, 500, None)
+        );
+        let fits = f.fits.as_ref().unwrap();
+        assert_eq!(fits.iter().map(|x| x.from).collect::<Vec<_>>(), [300, 500, 700]);
+        // Day 650: the fit of day 500 on returns 100..500, run forward from its backcast.
+        let fit = garch_fit(&r[100..500], true).unwrap();
+        assert_eq!(fit, fits[1].fit);
+        let v = variances(&r[100..650], &fit.params, fit.backcast);
+        let m = f.multipliers.unwrap();
+        assert!((f.var[650 - 300] - v[550].sqrt() * m[0]).abs() < 1e-15);
+        // The filtered simulation uses the GARCH residuals.
+        let h = var_forecasts_with(
+            &r,
+            vol,
+            300,
+            0.99,
+            0.975,
+            Innovations::Filtered {
+                window: None,
+                min_residuals: 250,
+            },
+        )
+        .unwrap();
+        assert_eq!((h.model.as_str(), h.start, h.var.len()), ("gjr-fhs", 550, 250));
+        let mut z: Vec<f64> = (300..700).map(|s| r[s] / f.sigma[s - 300]).collect();
+        z.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let v = crate::risk::var_es(&z, 0.99, 0.975).unwrap();
+        assert!((h.es[700 - 550] - f.sigma[400] * v.es).abs() < 1e-15);
+        let bad = Volatility::Garch {
+            asymmetric: false,
+            refit: 0,
+            window: None,
+        };
+        assert!(var_forecasts_with(&r, bad, 300, 0.99, 0.975, Innovations::Normal).is_err());
     }
 }

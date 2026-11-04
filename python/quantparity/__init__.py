@@ -16,6 +16,8 @@ from ._core import (  # noqa: F401
     crr,
     discrimination,
     es_backtest,
+    garch_fit,
+    garch_loglik,
     implied_vol,
     kupiec,
     norm_inv,
