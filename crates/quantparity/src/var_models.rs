@@ -238,7 +238,7 @@ pub fn var_forecasts_with(
                 let i = sorted.partition_point(|y| *y < x);
                 sorted.insert(i, x);
                 if let Some(w) = window {
-                    if t + 1 >= warmup + w + 1 {
+                    if t >= warmup + w {
                         let old = z(t - w);
                         let j = sorted.partition_point(|y| *y < old);
                         sorted.remove(j);

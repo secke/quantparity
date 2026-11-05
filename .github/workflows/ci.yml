@@ -21,10 +21,15 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   python:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        python: ["3.9", "3.13"]
+        include:
+          # Oldest supported Python (abi3-py39): no longer built for the latest Ubuntu runner.
+          - python: "3.9"
+            os: ubuntu-24.04
+          - python: "3.13"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
