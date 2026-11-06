@@ -147,6 +147,22 @@ def test_var_es_models_and_es_backtest():
         qp.var_forecasts(returns, innovations="t", nu=2)
 
 
+def test_z2_simulation():
+    rng = random.Random(5)
+    returns = [0.01 * rng.gauss(0, 1) for _ in range(600)]
+    f = qp.var_forecasts(returns, innovations="t", nu=4)
+    r = returns[f["start"]:]
+    z2 = qp.es_backtest(r, f["es_var"], f["es"], 0.975)["z2"]
+    s = qp.z2_simulation(returns, f, z2, simulations=2000, seed=3)
+    assert 0 < s["p_value"] <= 1 and s["observations"] == len(r) and s["zone"] in ("green", "yellow", "red")
+    assert s == qp.z2_simulation(returns, f, z2, simulations=2000, seed=3)
+    w = qp.z2_simulation(returns, f, -0.7, from_=300, to=550, simulations=2000)
+    assert w["observations"] == 250 and w["critical_5"] < 0
+    f["es"][0] *= 2
+    with pytest.raises(ValueError):
+        qp.z2_simulation(returns, f, z2)
+
+
 def test_garch_filter():
     rng = random.Random(7)
     s2, returns = 1e-4, []

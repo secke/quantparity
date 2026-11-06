@@ -456,6 +456,36 @@ fn var_forecasts(
     to_py(py, &f)
 }
 
+/// P-value of an observed Z2 by simulation from the forecast distribution: `forecasts` is the
+/// output of `var_forecasts` on `returns`, the test covers returns `from_..to` (default: every
+/// forecast day).
+#[pyfunction]
+#[pyo3(signature = (returns, forecasts, z2, from_=None, to=None, simulations=10000, seed=1))]
+#[allow(clippy::too_many_arguments)]
+fn z2_simulation(
+    py: Python<'_>,
+    returns: Vec<f64>,
+    forecasts: &Bound<'_, PyAny>,
+    z2: f64,
+    from_: Option<usize>,
+    to: Option<usize>,
+    simulations: usize,
+    seed: u64,
+) -> PyResult<PyObject> {
+    let f: var_models::VarForecasts = depythonize(forecasts).map_err(err)?;
+    let null = validation::Z2Null::new(&returns, &f).map_err(err)?;
+    let s = null
+        .test(
+            z2,
+            from_.unwrap_or(f.start),
+            to.unwrap_or(returns.len()),
+            simulations,
+            seed,
+        )
+        .map_err(err)?;
+    to_py(py, &s)
+}
+
 /// Gaussian quasi-maximum likelihood fit of a GARCH(1,1), or GJR-GARCH(1,1) if `asymmetric`,
 /// with zero mean and the conventions of the `arch` package.
 #[pyfunction]
@@ -558,6 +588,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(es_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(var_forecasts, m)?)?;
     m.add_function(wrap_pyfunction!(garch_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(z2_simulation, m)?)?;
     m.add_function(wrap_pyfunction!(garch_loglik, m)?)?;
     m.add_function(wrap_pyfunction!(norm_inv, m)?)?;
     m.add_function(wrap_pyfunction!(t_inv, m)?)?;

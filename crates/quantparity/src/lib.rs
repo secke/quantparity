@@ -11,7 +11,8 @@
 //! - **VaR / ES models**: EWMA, GARCH or GJR-GARCH volatility with normal or Student-t
 //!   innovations, filtered historical simulation; one-day forecasts of VaR and expected shortfall.
 //! - **Model validation**: Kupiec, Christoffersen, Basel traffic light, PSI, AUC/Gini/KS,
-//!   binomial and Hosmer-Lemeshow calibration tests, Acerbi-Székely expected shortfall backtests.
+//!   binomial and Hosmer-Lemeshow calibration tests, Acerbi-Székely expected shortfall backtests with
+//!   p-values by simulation from the forecast distribution.
 //!
 //! Every result is checked against QuantLib (and the volatility models against the Python `arch`
 //! package) in the repository's `validation/` suite.

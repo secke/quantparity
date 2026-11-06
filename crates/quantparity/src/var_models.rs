@@ -104,7 +104,7 @@ fn multipliers(innov: Innovations, a: f64, e: f64) -> Result<[f64; 3], String> {
 
 /// k-th worst (k = ⌈n(1-α)⌉) and mean of the k worst values of a sorted sample, as in
 /// [`crate::risk::var_es`].
-fn tail(sorted: &[f64], conf: f64) -> (f64, f64) {
+pub(crate) fn tail(sorted: &[f64], conf: f64) -> (f64, f64) {
     let n = sorted.len();
     let k = (((1.0 - conf) * n as f64 - 1e-9).ceil().max(1.0) as usize).min(n);
     (-sorted[k - 1], -sorted[..k].iter().sum::<f64>() / k as f64)
@@ -131,7 +131,7 @@ pub fn var_forecasts(
 }
 
 /// σ_t for t = `warmup` … n-1, from the returns before t, and the GARCH fits used.
-fn volatility_path(
+pub(crate) fn volatility_path(
     returns: &[f64],
     volatility: Volatility,
     warmup: usize,

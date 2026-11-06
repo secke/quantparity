@@ -35,6 +35,7 @@ from ._core import (  # noqa: F401
     var_backtest,
     var_es,
     var_forecasts,
+    z2_simulation,
 )
 
 __all__ = [n for n in dir() if not n.startswith("_")] + ["__version__"]
