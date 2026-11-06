@@ -1,6 +1,6 @@
 //! PD model validation: discriminatory power and calibration.
 
-use crate::stats::{binom_sf, chi2_sf};
+use crate::stats::{beta_inc, binom_sf, chi2_sf};
 use crate::Status;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -88,6 +88,10 @@ pub struct GradeCalibration {
     pub observed_dr: f64,
     /// One-sided binomial test, H0: the PD is not underestimated.
     pub p_value: f64,
+    /// Jeffreys test of the ECB instructions (2019): P(PD' <= PD) under the posterior
+    /// Beta(D + 1/2, N - D + 1/2) of the default rate; the status follows it when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jeffreys_p_value: Option<f64>,
     pub status: Status,
 }
 
@@ -100,9 +104,40 @@ pub struct Calibration {
     pub status: Status,
 }
 
+/// Test of each grade's PD in `calibration_with`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GradeTest {
+    /// Exact one-sided binomial test.
+    Binomial,
+    /// Jeffreys test (beta posterior with the Jeffreys prior), the binomial p-value kept beside it.
+    Jeffreys,
+}
+
+impl GradeTest {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "binomial" => Ok(Self::Binomial),
+            "jeffreys" => Ok(Self::Jeffreys),
+            _ => Err(format!("unknown test {s:?} (binomial or jeffreys)")),
+        }
+    }
+}
+
+/// Jeffreys p-value of a grade with `defaults` out of `obligors` and mean PD `pd`.
+pub fn jeffreys_p_value(defaults: u64, obligors: u64, pd: f64) -> f64 {
+    let d = defaults as f64;
+    beta_inc(d + 0.5, obligors as f64 - d + 0.5, pd)
+}
+
 /// Calibration by rating grade: binomial test per grade and overall Hosmer-Lemeshow
 /// (out-of-sample validation: degrees of freedom = number of grades).
 pub fn calibration(grade: &[f64], pd: &[f64], default: &[bool]) -> Option<Calibration> {
+    calibration_with(grade, pd, default, GradeTest::Binomial)
+}
+
+/// `calibration` with the test of each grade's PD.
+pub fn calibration_with(grade: &[f64], pd: &[f64], default: &[bool], test: GradeTest) -> Option<Calibration> {
     if grade.is_empty() || grade.len() != pd.len() || pd.len() != default.len() {
         return None;
     }
@@ -126,6 +161,7 @@ pub fn calibration(grade: &[f64], pd: &[f64], default: &[bool]) -> Option<Calibr
                 hl += (d as f64 - expected).powi(2) / (expected * (1.0 - p));
             }
             let p_value = binom_sf(d as u64, n as u64, p);
+            let jeffreys = (test == GradeTest::Jeffreys).then(|| jeffreys_p_value(d as u64, n as u64, p));
             GradeCalibration {
                 grade: g,
                 obligors: n,
@@ -133,7 +169,8 @@ pub fn calibration(grade: &[f64], pd: &[f64], default: &[bool]) -> Option<Calibr
                 mean_pd: p,
                 observed_dr: d as f64 / n as f64,
                 p_value,
-                status: Status::from_p_value(p_value),
+                jeffreys_p_value: jeffreys,
+                status: Status::from_p_value(jeffreys.unwrap_or(p_value)),
             }
         })
         .collect();
@@ -181,5 +218,11 @@ mod tests {
         assert_eq!(c.grades[0].status, Status::Pass);
         assert_eq!(c.grades[1].status, Status::Fail);
         assert_eq!(c.status, Status::Fail);
+        assert!(c.grades[0].jeffreys_p_value.is_none());
+        let j = calibration_with(&grade, &vec![0.01; 2000], &def, GradeTest::Jeffreys).unwrap();
+        // scipy.stats.beta.cdf(0.01, 10.5, 990.5) = 0.47906, beta.cdf(0.01, 40.5, 960.5) = 2.3e-13.
+        assert!((j.grades[0].jeffreys_p_value.unwrap() - 0.4790568062303894).abs() < 1e-12);
+        assert!(j.grades[1].jeffreys_p_value.unwrap() < 1e-9);
+        assert_eq!((j.grades[0].status, j.grades[1].status), (Status::Pass, Status::Fail));
     }
 }

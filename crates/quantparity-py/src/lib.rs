@@ -554,12 +554,15 @@ fn discrimination(
     )
 }
 
-/// PD calibration by grade: binomial test per grade and Hosmer-Lemeshow overall.
+/// PD calibration by grade: binomial (or Jeffreys, `test="jeffreys"`) test per grade and
+/// Hosmer-Lemeshow overall.
 #[pyfunction]
-fn calibration(py: Python<'_>, grade: Vec<f64>, pd: Vec<f64>, default: Vec<bool>) -> PyResult<PyObject> {
+#[pyo3(signature = (grade, pd, default, test="binomial"))]
+fn calibration(py: Python<'_>, grade: Vec<f64>, pd: Vec<f64>, default: Vec<bool>, test: &str) -> PyResult<PyObject> {
+    let test = validation::GradeTest::parse(test).map_err(err)?;
     to_py(
         py,
-        &need(validation::calibration(&grade, &pd, &default), "calibration")?,
+        &need(validation::calibration_with(&grade, &pd, &default, test), "calibration")?,
     )
 }
 

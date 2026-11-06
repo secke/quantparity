@@ -38,6 +38,7 @@ Results of [`validation/validate_quantlib.py`](validation/validate_quantlib.py) 
 | Cumulative PDs from an 8-state rating migration matrix, 1 to 30 years (`numpy.linalg.matrix_power`) | 210 | 4.4e-16 |
 | LGD / CCF backtest: t statistic and one-sided p-value (`scipy.stats.ttest_1samp`) | 12 × 2 | 8.8e-14 |
 | LGD / CCF backtest: concordance (1 + Somers' D) / 2 (`scipy.stats.somersd`) | 12 | 0 |
+| PD calibration: Jeffreys p-value by grade, 30 to 100,000 obligors (`scipy.stats.beta.cdf`) | 16 | 2.2e-11 |
 | IFRS 9 staging from the SICR criteria, 20,000 facilities (the same rules in numpy) | 9 | 0 |
 
 The normal quantile gap is QuantLib's: `InverseCumulativeNormal` is Acklam's approximation without a refinement step, accurate to about 1e-9; quantparity refines it and agrees with scipy to 4e-15. Filtered historical simulation and the Acerbi-Székely statistics are recomputed independently in the validation script (gaps of 1e-17 and 2e-15). The volatility models have no QuantLib counterpart and are reconciled with the Python [`arch`](https://github.com/bashtage/arch) package instead, on 36 simulated samples of 500 to 2,500 days.
@@ -71,7 +72,7 @@ Replacing only that line in an otherwise identical tree reproduces QuantLib to 9
 | FRTB | P&L attribution test: hypothetical vs risk-theoretical P&L, Spearman correlation and Kolmogorov-Smirnov distance, green/amber/red zones |
 | Volatility | GARCH(1,1) and GJR-GARCH(1,1) by Gaussian quasi-maximum likelihood, with the conventions of `arch` |
 | VaR / ES models | One-day forecasts with an EWMA (RiskMetrics), GARCH or GJR volatility, refitted on a rolling or expanding window, and normal, unit-variance Student-t or filtered historical simulation innovations (Barone-Adesi, Hull-White): VaR, ES and the VaR at the ES level |
-| Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests with simulated p-values, PSI, AUC / Gini / KS, binomial and Hosmer-Lemeshow PD calibration, LGD and CCF backtests (one-sided t-test by segment, concordance), IFRS 9 staging check |
+| Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests with simulated p-values, PSI, AUC / Gini / KS, binomial, Jeffreys and Hosmer-Lemeshow PD calibration, LGD and CCF backtests (one-sided t-test by segment, concordance), IFRS 9 staging check |
 | IFRS 9 credit | ECL of a facility in stage 1, 2 or 3: PD curves (flat hazard, cumulative PDs by year, powers of a rating migration matrix, cohort estimate of the matrix), exposure profiles (bullet, linear, annuity), discounting at the effective interest rate |
 
 ## Install
@@ -150,6 +151,7 @@ qp.z2_simulation(returns, f, b["z2"], simulations=10000)       # p-value of Z2 u
 qp.psi(reference_scores, current_scores, bins=10)
 qp.discrimination(scores, defaults)                            # AUC, Gini, KS
 qp.calibration(grades, pds, defaults)                          # binomial per grade, Hosmer-Lemeshow
+qp.calibration(grades, pds, defaults, test="jeffreys")         # Jeffreys test of the ECB instructions
 ```
 
 ### IFRS 9 credit
@@ -167,7 +169,7 @@ Conventions: a default in period k happens at its end, on the balance outstandin
 
 ### Finding: the LGD t-test keeps its level on U-shaped LGDs
 
-Realized LGDs pile up near 0 and 1, far from the normal law behind a t-test. The validation script draws 4,000 samples of 20, 50 and 200 realized LGDs from Beta(0.4, 0.6) with a correct estimate: the one-sided test rejects 4.2%, 4.7% and 4.2% of them at 5%. It is slightly conservative, not too severe, even on 20 defaults.
+Realized LGDs pile up near 0 and 1, far from the normal law behind a t-test. The validation script draws 4,000 samples of 20, 50 and 200 realized LGDs from Beta(0.4, 0.6) with a correct estimate: the one-sided test rejects 3.9%, 4.2% and 4.5% of them at 5%. It is slightly conservative, not too severe, even on 20 defaults.
 
 ### Finding: the Z2 thresholds hold down to about 5 degrees of freedom
 

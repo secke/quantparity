@@ -183,6 +183,15 @@ def test_garch_filter():
         qp.var_forecasts(returns, volatility="egarch")
 
 
+def test_jeffreys_calibration():
+    c = qp.calibration([1.0] * 1000, [0.01] * 1000, [i < 40 for i in range(1000)], test="jeffreys")
+    g = c["grades"][0]
+    assert g["jeffreys_p_value"] < 1e-9 and g["status"] == "fail"
+    assert "jeffreys_p_value" not in qp.calibration([1.0, 1.0], [0.1, 0.1], [True, False])["grades"][0]
+    with pytest.raises(ValueError):
+        qp.calibration([1.0], [0.1], [False], test="exact")
+
+
 def test_ifrs9():
     e = qp.ecl(2, 1000, 0.45, 0.05, 5, [0.02], periods_per_year=1, repayment="bullet")
     exact = sum(0.98 ** (k - 1) * 0.02 * 0.45 * 1000 / 1.05 ** k for k in range(1, 6))

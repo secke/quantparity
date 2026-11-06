@@ -8,7 +8,10 @@ pub mod staging;
 pub mod var_backtest;
 pub mod z2_simulation;
 
-pub use credit::{calibration, discrimination, Calibration, Discrimination, GradeCalibration};
+pub use credit::{
+    calibration, calibration_with, discrimination, jeffreys_p_value, Calibration, Discrimination, GradeCalibration,
+    GradeTest,
+};
 pub use drift::{psi, Psi};
 pub use es_backtest::{es_backtest, EsBacktest};
 pub use lgd::{concordance, parameter_backtest, realized_ccf, ParameterBacktest, RealizedCcf, SegmentBacktest};
