@@ -34,6 +34,11 @@ Results of [`validation/validate_quantlib.py`](validation/validate_quantlib.py) 
 | GARCH / GJR-GARCH(1,1) fit: log-likelihood at the optimum (against `arch`) | 36 | 1.8e-10 |
 | GARCH / GJR-GARCH(1,1) fit: parameters (ω × 1e4, α, γ, β) | 126 | 7.2e-7 |
 | Z2 null distribution by simulation, P(Z2 ≤ -0.70) and P(Z2 ≤ -1.8), normal, t3, t5 (against an independent numpy / scipy Monte Carlo) | 6 | 1.2e-3 (Monte Carlo noise: standard error 8e-4) |
+| IFRS 9 ECL, stages 1 to 3, bullet / linear / annuity, 1 to 12 periods a year (against an independent numpy implementation) | 600 | 9.8e-15 relative |
+| Cumulative PDs from an 8-state rating migration matrix, 1 to 30 years (`numpy.linalg.matrix_power`) | 210 | 4.4e-16 |
+| LGD / CCF backtest: t statistic and one-sided p-value (`scipy.stats.ttest_1samp`) | 12 × 2 | 8.8e-14 |
+| LGD / CCF backtest: concordance (1 + Somers' D) / 2 (`scipy.stats.somersd`) | 12 | 0 |
+| IFRS 9 staging from the SICR criteria, 20,000 facilities (the same rules in numpy) | 9 | 0 |
 
 The normal quantile gap is QuantLib's: `InverseCumulativeNormal` is Acklam's approximation without a refinement step, accurate to about 1e-9; quantparity refines it and agrees with scipy to 4e-15. Filtered historical simulation and the Acerbi-Székely statistics are recomputed independently in the validation script (gaps of 1e-17 and 2e-15). The volatility models have no QuantLib counterpart and are reconciled with the Python [`arch`](https://github.com/bashtage/arch) package instead, on 36 simulated samples of 500 to 2,500 days.
 
@@ -66,7 +71,8 @@ Replacing only that line in an otherwise identical tree reproduces QuantLib to 9
 | FRTB | P&L attribution test: hypothetical vs risk-theoretical P&L, Spearman correlation and Kolmogorov-Smirnov distance, green/amber/red zones |
 | Volatility | GARCH(1,1) and GJR-GARCH(1,1) by Gaussian quasi-maximum likelihood, with the conventions of `arch` |
 | VaR / ES models | One-day forecasts with an EWMA (RiskMetrics), GARCH or GJR volatility, refitted on a rolling or expanding window, and normal, unit-variance Student-t or filtered historical simulation innovations (Barone-Adesi, Hull-White): VaR, ES and the VaR at the ES level |
-| Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests with simulated p-values, PSI, AUC / Gini / KS, binomial and Hosmer-Lemeshow PD calibration |
+| Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests with simulated p-values, PSI, AUC / Gini / KS, binomial and Hosmer-Lemeshow PD calibration, LGD and CCF backtests (one-sided t-test by segment, concordance), IFRS 9 staging check |
+| IFRS 9 credit | ECL of a facility in stage 1, 2 or 3: PD curves (flat hazard, cumulative PDs by year, powers of a rating migration matrix, cohort estimate of the matrix), exposure profiles (bullet, linear, annuity), discounting at the effective interest rate |
 
 ## Install
 
@@ -146,6 +152,23 @@ qp.discrimination(scores, defaults)                            # AUC, Gini, KS
 qp.calibration(grades, pds, defaults)                          # binomial per grade, Hosmer-Lemeshow
 ```
 
+### IFRS 9 credit
+
+```python
+qp.ecl(stage=2, balance=10_000, lgd=0.45, eir=0.06, periods=48, pd_curve=[0.02, 0.045, 0.07])
+# {'ecl_12m': ..., 'ecl_lifetime': ..., 'ecl': ..., 'pd_horizon': ...}   monthly periods, annuity
+qp.migration_pd_curve(states, matrix, from_state=2, years=10)  # cumulative PDs from M^1 ... M^10
+qp.parameter_backtest(lgd_estimated, lgd_realized, segment=grades)  # t-test per segment, concordance
+c = qp.realized_ccf(limits, drawn_12m_before, ead)              # then parameter_backtest(..., parameter="ccf")
+qp.staging_check(records, {"relative_threshold": 2.0, "absolute_threshold": 0.005, "low_credit_risk_pd": 0.003})
+```
+
+Conventions: a default in period k happens at its end, on the balance outstanding during the period, and is discounted from that date at the effective interest rate; stage 1 takes the defaults of the first 12 months, stages 2 and 3 those of the remaining life; a stage 3 facility loses LGD × EAD. Between two whole years of a PD curve the hazard rate is constant, and after its last year the conditional PD of that year repeats. The staging rules follow IFRS 9: more than 90 days past due or in default is stage 3; more than 30 days past due (5.5.11), a watch list or forbearance flag, or a significant increase of the PD since origination (relative and absolute thresholds, low credit risk exemption of 5.5.10) is stage 2.
+
+### Finding: the LGD t-test keeps its level on U-shaped LGDs
+
+Realized LGDs pile up near 0 and 1, far from the normal law behind a t-test. The validation script draws 4,000 samples of 20, 50 and 200 realized LGDs from Beta(0.4, 0.6) with a correct estimate: the one-sided test rejects 4.2%, 4.7% and 4.2% of them at 5%. It is slightly conservative, not too severe, even on 20 defaults.
+
 ### Finding: the Z2 thresholds hold down to about 5 degrees of freedom
 
 Acerbi and Székely report that the 5% and 0.01% thresholds of their Z2 test, -0.70 and -1.8 on 250 days, hardly depend on the distribution. The validation script checks this by simulation, with 4,000 samples drawn from the forecast distribution itself:
@@ -199,7 +222,7 @@ Markets: `{"as_of": "YYYY-MM-DD", "curves": {"<name>": {...}}}`. Curves with `"k
 ## Reproduce
 
 ```bash
-cargo test                                         # 51 Rust tests (Hull, Haug and closed-form values)
+cargo test                                         # 66 Rust tests (Hull, Haug and closed-form values)
 pip install pytest QuantLib==1.44 && pytest tests  # Python API
 pip install scipy && python validation/validate_quantlib.py --check   # QuantLib parity, fails above the limits
 ```

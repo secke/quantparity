@@ -13,6 +13,9 @@
 //! - **Model validation**: Kupiec, Christoffersen, Basel traffic light, PSI, AUC/Gini/KS,
 //!   binomial and Hosmer-Lemeshow calibration tests, Acerbi-Székely expected shortfall backtests with
 //!   p-values by simulation from the forecast distribution.
+//! - **IFRS 9 credit**: ECL of a facility from PD curves (flat hazard, empirical, rating migration
+//!   matrices), LGD, exposure profiles and the effective interest rate; LGD and CCF backtests;
+//!   recomputation of the stages from the SICR criteria.
 //!
 //! Every result is checked against QuantLib (and the volatility models against the Python `arch`
 //! package) in the repository's `validation/` suite.
@@ -23,6 +26,7 @@ pub mod benchmark;
 pub mod curves;
 pub mod dates;
 pub mod garch;
+pub mod ifrs9;
 mod instruments;
 pub mod risk;
 pub mod stats;

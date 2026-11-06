@@ -397,6 +397,103 @@ for label, a, b in z2_sim_size:
     if not 0.03 <= b <= 0.07:  # 1,000 samples: 5% ± 2 standard deviations
         failures.append(f"Z2 simulated test, {label}: size {b:.1%} instead of 5%")
 
+# ------------------------------------------------------------------ 9. IFRS 9 credit
+# (a) ECL against an independent numpy implementation of the same conventions: default at the end
+# of each period, exposure outstanding at its start, discounting at the EIR from that date.
+def ecl_numpy(stage, balance, lgd, eir, periods, curve, ppy, repayment):
+    t = np.arange(1, periods + 1) / ppy
+    surv_years = np.concatenate([[1.0], 1 - np.array(curve)])
+    y = np.floor(t).astype(int)
+    last = len(curve)
+    a = np.where(y < last, surv_years[np.minimum(y, last)], surv_years[last - 1])
+    b = np.where(y < last, surv_years[np.minimum(y + 1, last)], surv_years[last])
+    surv = np.where(y < last, a * (b / a) ** (t - y), b * (b / a) ** (t - last))
+    cum = 1 - surv
+    k = np.arange(periods)
+    r = (1 + eir) ** (1 / ppy) - 1
+    if repayment == "bullet":
+        ead = np.full(periods, balance)
+    elif repayment == "linear":
+        ead = balance * (1 - k / periods)
+    else:
+        ead = balance * (1 - (1 + r) ** -(periods - k)) / (1 - (1 + r) ** -periods)
+    if stage == 3:
+        return lgd * balance
+    loss = np.diff(np.concatenate([[0.0], cum])) * lgd * ead * (1 + eir) ** -t
+    return loss[: min(ppy, periods)].sum() if stage == 1 else loss.sum()
+
+
+gen = np.random.default_rng(9)
+ecl_pairs = []
+for _ in range(600):
+    stage, ppy = int(gen.integers(1, 4)), int(gen.choice([1, 4, 12]))
+    periods = int(gen.integers(1, 12 * ppy))
+    curve = list(np.cumsum(gen.uniform(0.001, 0.08, int(gen.integers(1, 8)))).clip(max=0.99))
+    rep = str(gen.choice(["bullet", "linear", "annuity"]))
+    args = (stage, float(gen.uniform(1e3, 1e6)), float(gen.uniform(0.05, 0.9)), float(gen.uniform(0.0, 0.25)), periods)
+    ecl_pairs.append((qp.ecl(*args, curve, ppy, rep)["ecl"], ecl_numpy(*args, curve, ppy, rep)))
+record("IFRS 9 ECL", "ECL: stages 1-3, bullet / linear / annuity, 1 to 12 periods a year", ecl_pairs,
+       "independent numpy implementation; 600 random facilities and PD curves of 1 to 7 years", limit=1e-6)
+
+# (b) Lifetime PD from a rating migration matrix: the default column of the matrix powers.
+states = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC", "D"]
+mig = gen.dirichlet(np.ones(8) * 0.3, size=8) * 0.3 + np.eye(8) * 0.7
+mig[7] = np.eye(8)[7]
+mig = mig / mig.sum(axis=1, keepdims=True)
+mig_pairs = []
+for g in range(7):
+    c = qp.migration_pd_curve(states, mig.tolist(), g, 30)
+    mig_pairs += [(c[y - 1], np.linalg.matrix_power(mig, y)[g, 7]) for y in range(1, 31)]
+record("IFRS 9 ECL", "cumulative PD from an 8-state migration matrix, 1 to 30 years", mig_pairs,
+       "numpy.linalg.matrix_power", limit=1e-12)
+
+# (c) LGD / CCF backtests: one-sided t-test and concordance against scipy.
+t_pairs, p_pairs, c_pairs = [], [], []
+for n in (12, 50, 400, 1500):
+    for shift in (-0.05, 0.0, 0.03):
+        est = gen.uniform(0.1, 0.7, n)
+        real = np.clip(est + shift + gen.normal(0, 0.25, n), 0, 1).round(2)
+        b = qp.parameter_backtest(est.tolist(), real.tolist())
+        ref = stats.ttest_1samp(real - est, 0.0, alternative="greater")
+        t_pairs.append((b["overall"]["t_statistic"], ref.statistic))
+        p_pairs.append((b["overall"]["p_value"], ref.pvalue))
+        c_pairs.append((b["concordance"], (1 + stats.somersd(real, est).statistic) / 2))
+record("LGD / CCF backtest", "t statistic, realized - estimated", t_pairs, "scipy.stats.ttest_1samp", limit=1e-9)
+record("LGD / CCF backtest", "one-sided p-value", p_pairs, "scipy.stats.ttest_1samp(alternative='greater')", limit=1e-9)
+record("LGD / CCF backtest", "concordance (1 + Somers' D) / 2, with ties", c_pairs, "scipy.stats.somersd", limit=1e-12)
+
+# (d) Size of the LGD t-test when the estimate is right, on realized LGDs with the U shape of
+# observed recoveries: Beta(0.4, 0.6), mean 0.4, a mass of near-total recoveries and losses.
+lgd_size = []
+for n in (20, 50, 200):
+    rej = 0
+    for k in range(4000):
+        real = gen.beta(0.4, 0.6, n)
+        rej += qp.parameter_backtest([0.4] * n, real.tolist())["overall"]["p_value"] < 0.05
+    lgd_size.append((n, rej / 4000))
+for n, size in lgd_size:
+    if not 0.04 <= size <= 0.07:
+        failures.append(f"LGD t-test, n = {n}: size {size:.1%} instead of 5%")
+
+# (e) Staging: the same rules written with numpy, on 20,000 random facilities.
+m = 20_000
+dpd = gen.choice([0, 0, 0, 5, 29, 30, 31, 60, 90, 91, 120], m).astype(float)
+pd0 = gen.uniform(0.001, 0.05, m)
+pd1 = pd0 * gen.lognormal(0, 0.6, m)
+flag, dflt = gen.random(m) < 0.02, gen.random(m) < 0.01
+rules = {"dpd_stage2": 30, "dpd_stage3": 90, "relative_threshold": 2.0, "absolute_threshold": 0.005, "low_credit_risk_pd": 0.003}
+s3 = dflt | (dpd > 90)
+s2 = (dpd > 30) | flag | ((pd1 >= 2 * pd0) & (pd1 - pd0 >= 0.005) & (pd1 > 0.003) & (pd1 > pd0))
+expected = np.where(s3, 3, np.where(s2, 2, 1))
+reported = np.where(gen.random(m) < 0.97, expected, gen.integers(1, 4, m))
+recs = [{"reported_stage": int(reported[i]), "defaulted": bool(dflt[i]), "dpd": float(dpd[i]), "pd_origination": float(pd0[i]),
+         "pd_current": float(pd1[i]), "flag": bool(flag[i])} for i in range(m)]
+st = qp.staging_check(recs, rules)
+conf = np.zeros((3, 3), int)
+np.add.at(conf, (reported - 1, expected - 1), 1)
+record("IFRS 9 staging", "recomputed stage: 3 × 3 table reported / recomputed", list(zip(np.ravel(st["confusion"]), np.ravel(conf))),
+       "the same rules in numpy, 20,000 random facilities", limit=0)
+
 # ------------------------------------------------------------------ 8. Speed
 trades = json.loads((ROOT / "examples/data/portfolio.json").read_text())
 hist = (ROOT / "examples/data/factor_history.csv").read_text().strip().splitlines()
@@ -456,6 +553,17 @@ lines += [
     "|---|---:|---:|",
 ]
 lines += [f"| {label} | {a:.1%} | {b:.1%} |" for label, a, b in z2_sim_size]
+lines += [
+    "",
+    "## LGD backtest: size of the t-test",
+    "",
+    "4,000 samples of n realized LGDs drawn from Beta(0.4, 0.6), the U shape of observed recoveries, with",
+    "an estimate equal to their mean, 0.4. Rejection rate of the one-sided t-test at 5%.",
+    "",
+    "| n | Rejected |",
+    "|---:|---:|",
+]
+lines += [f"| {n} | {size:.1%} |" for n, size in lgd_size]
 lines += [
     "",
     "## Full revaluation speed",

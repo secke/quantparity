@@ -8,7 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pythonize::{depythonize, pythonize};
-use quantparity::{self as qp, benchmark, curves, risk, stats, validation, var_models, OptionType};
+use quantparity::{self as qp, benchmark, curves, ifrs9, risk, stats, validation, var_models, OptionType};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -563,6 +563,151 @@ fn calibration(py: Python<'_>, grade: Vec<f64>, pd: Vec<f64>, default: Vec<bool>
     )
 }
 
+/// IFRS 9 ECL of a facility: `pd_curve` lists the cumulative PDs at the end of each year.
+#[pyfunction]
+#[pyo3(signature = (stage, balance, lgd, eir, periods, pd_curve, periods_per_year=12, repayment="annuity"))]
+fn ecl(
+    py: Python<'_>,
+    stage: u8,
+    balance: f64,
+    lgd: f64,
+    eir: f64,
+    periods: usize,
+    pd_curve: Vec<f64>,
+    periods_per_year: u32,
+    repayment: &str,
+) -> PyResult<PyObject> {
+    let pd = ifrs9::PdCurve::new(pd_curve).map_err(err)?;
+    let f = ifrs9::Facility {
+        stage,
+        balance,
+        lgd,
+        eir,
+        periods,
+        repayment: ifrs9::Repayment::parse(repayment).map_err(err)?,
+    };
+    to_py(py, &f.ecl(&pd, periods_per_year).map_err(err)?)
+}
+
+/// IFRS 9 ECL from period-by-period cumulative PDs, LGDs and exposures.
+#[pyfunction]
+#[pyo3(signature = (stage, cumulative_pd, lgd, ead, eir, periods_per_year=12))]
+fn ecl_profile(
+    py: Python<'_>,
+    stage: u8,
+    cumulative_pd: Vec<f64>,
+    lgd: Vec<f64>,
+    ead: Vec<f64>,
+    eir: f64,
+    periods_per_year: u32,
+) -> PyResult<PyObject> {
+    let input = ifrs9::EclInput {
+        stage,
+        cumulative_pd,
+        lgd,
+        ead,
+        eir,
+    };
+    to_py(py, &ifrs9::ecl(&input, periods_per_year).map_err(err)?)
+}
+
+/// Cumulative PDs over `years` years from state `from_state` of an annual migration matrix whose
+/// last state is default.
+#[pyfunction]
+fn migration_pd_curve(
+    states: Vec<String>,
+    matrix: Vec<Vec<f64>>,
+    from_state: usize,
+    years: usize,
+) -> PyResult<Vec<f64>> {
+    let m = ifrs9::MigrationMatrix::new(states, matrix).map_err(err)?;
+    Ok(m.pd_curve(from_state, years).map_err(err)?.cumulative)
+}
+
+/// Exposure profile: balance outstanding in each remaining period.
+#[pyfunction]
+#[pyo3(signature = (balance, periods, eir, periods_per_year=12, repayment="annuity"))]
+fn exposure_profile(
+    balance: f64,
+    periods: usize,
+    eir: f64,
+    periods_per_year: u32,
+    repayment: &str,
+) -> PyResult<Vec<f64>> {
+    Ok(ifrs9::Repayment::parse(repayment)
+        .map_err(err)?
+        .profile(balance, periods, eir, periods_per_year))
+}
+
+/// LGD or CCF backtest: one-sided t-test by segment and overall, concordance of the ranking.
+#[pyfunction]
+#[pyo3(signature = (estimated, realized, segment=None, parameter="lgd", min_concordance=0.6))]
+fn parameter_backtest(
+    py: Python<'_>,
+    estimated: Vec<f64>,
+    realized: Vec<f64>,
+    segment: Option<Vec<f64>>,
+    parameter: &str,
+    min_concordance: f64,
+) -> PyResult<PyObject> {
+    let b = validation::parameter_backtest(parameter, &estimated, &realized, segment.as_deref(), min_concordance);
+    to_py(py, &need(b, "parameter_backtest")?)
+}
+
+/// (1 + Somers' D(estimated | realized)) / 2.
+#[pyfunction]
+fn concordance(estimated: Vec<f64>, realized: Vec<f64>) -> Option<f64> {
+    validation::concordance(&estimated, &realized)
+}
+
+/// Realized CCFs, (EAD − drawn) / (limit − drawn), for an undrawn amount above `min_undrawn`.
+#[pyfunction]
+#[pyo3(signature = (limit, drawn, ead, min_undrawn=0.0))]
+fn realized_ccf(
+    py: Python<'_>,
+    limit: Vec<f64>,
+    drawn: Vec<f64>,
+    ead: Vec<f64>,
+    min_undrawn: f64,
+) -> PyResult<PyObject> {
+    to_py(
+        py,
+        &need(
+            validation::realized_ccf(&limit, &drawn, &ead, min_undrawn),
+            "realized_ccf",
+        )?,
+    )
+}
+
+/// IFRS 9 staging check: `records` is a list of dicts (reported_stage, defaulted, dpd,
+/// pd_origination, pd_current, flag, defaulted_next_12m), `rules` a dict of StagingRules fields.
+#[pyfunction]
+#[pyo3(signature = (records, rules=None))]
+fn staging_check(py: Python<'_>, records: &Bound<'_, PyAny>, rules: Option<&Bound<'_, PyAny>>) -> PyResult<PyObject> {
+    let mut v = from_py(records)?;
+    for r in v.as_array_mut().into_iter().flatten() {
+        if let Some(o) = r.as_object_mut() {
+            for (k, d) in [
+                ("defaulted", Value::Bool(false)),
+                ("dpd", 0.0.into()),
+                ("flag", Value::Bool(false)),
+            ] {
+                o.entry(k).or_insert(d);
+            }
+            o.entry("defaulted_next_12m").or_insert(Value::Null);
+        }
+    }
+    let records: Vec<validation::StagingRecord> = serde_json::from_value(v).map_err(err)?;
+    let mut r = serde_json::to_value(validation::StagingRules::default()).unwrap();
+    if let Some(o) = rules.filter(|o| !o.is_none()) {
+        for (k, x) in from_py(o)?.as_object().into_iter().flatten() {
+            r[k] = x.clone();
+        }
+    }
+    let rules: validation::StagingRules = serde_json::from_value(r).map_err(err)?;
+    to_py(py, &validation::staging_check(&records, &rules).map_err(err)?)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -596,5 +741,13 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(psi, m)?)?;
     m.add_function(wrap_pyfunction!(discrimination, m)?)?;
     m.add_function(wrap_pyfunction!(calibration, m)?)?;
+    m.add_function(wrap_pyfunction!(ecl, m)?)?;
+    m.add_function(wrap_pyfunction!(ecl_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(migration_pd_curve, m)?)?;
+    m.add_function(wrap_pyfunction!(exposure_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(parameter_backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(concordance, m)?)?;
+    m.add_function(wrap_pyfunction!(realized_ccf, m)?)?;
+    m.add_function(wrap_pyfunction!(staging_check, m)?)?;
     Ok(())
 }

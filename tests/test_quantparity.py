@@ -181,3 +181,26 @@ def test_garch_filter():
     assert "lambda" not in f and f["volatility"]["kind"] == "garch"
     with pytest.raises(ValueError):
         qp.var_forecasts(returns, volatility="egarch")
+
+
+def test_ifrs9():
+    e = qp.ecl(2, 1000, 0.45, 0.05, 5, [0.02], periods_per_year=1, repayment="bullet")
+    exact = sum(0.98 ** (k - 1) * 0.02 * 0.45 * 1000 / 1.05 ** k for k in range(1, 6))
+    assert abs(e["ecl"] - exact) < 1e-10 and abs(e["ecl_12m"] - 0.02 * 0.45 * 1000 / 1.05) < 1e-10
+    assert qp.ecl(3, 1000, 0.45, 0.05, 5, [0.02])["ecl"] == 450
+    p = qp.ecl_profile(1, [0.01, 0.02], [0.5], [100, 50], 0.0, periods_per_year=1)
+    assert abs(p["ecl_12m"] - 0.5) < 1e-15 and abs(p["ecl_lifetime"] - 0.75) < 1e-15
+    assert qp.exposure_profile(100, 4, 0.0, 4, "linear") == [100, 75, 50, 25]
+    c = qp.migration_pd_curve(["A", "B", "D"], [[0.9, 0.08, 0.02], [0.1, 0.8, 0.1], [0, 0, 1]], 0, 2)
+    assert abs(c[1] - (0.02 + 0.9 * 0.02 + 0.08 * 0.1)) < 1e-15
+    with pytest.raises(ValueError):
+        qp.ecl(1, 1000, 0.45, 0.05, 5, [0.03, 0.02])
+    b = qp.parameter_backtest([0.3] * 4, [0.4, 0.5, 0.3, 0.6], segment=[1, 1, 2, 2])
+    assert b["overall"]["mean_error"] > 0 and len(b["segments"]) == 2 and b["parameter"] == "lgd"
+    assert qp.concordance([1, 2, 3], [0.1, 0.2, 0.3]) == 1.0
+    r = qp.realized_ccf([100, 100], [40, 100], [70, 100])
+    assert r["ccf"] == [0.5] and r["excluded"] == 1
+    s = qp.staging_check([{"reported_stage": 1, "dpd": 45, "pd_origination": 0.01, "pd_current": 0.01},
+                          {"reported_stage": 1, "pd_origination": 0.01, "pd_current": 0.03}],
+                         {"relative_threshold": 4.0})
+    assert s["understaged"] == 1 and s["mismatches"][0]["reasons"] == ["dpd_stage2"] and s["status"] == "fail"
