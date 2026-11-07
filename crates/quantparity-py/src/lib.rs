@@ -8,7 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pythonize::{depythonize, pythonize};
-use quantparity::{self as qp, benchmark, curves, ifrs9, risk, stats, validation, var_models, OptionType};
+use quantparity::{self as qp, benchmark, curves, ifrs9, risk, saccr, stats, validation, var_models, OptionType};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -711,6 +711,16 @@ fn staging_check(py: Python<'_>, records: &Bound<'_, PyAny>, rules: Option<&Boun
     to_py(py, &validation::staging_check(&records, &rules).map_err(err)?)
 }
 
+/// SA-CCR exposure at default of a netting set: a dict with `id`, `trades` (list of dicts:
+/// id, asset_class, qualifier, notional, long, market_value, maturity, ...), `collateral` and
+/// `margin` (threshold, mta, nica, mpor_days or remargin_days).
+#[pyfunction]
+#[pyo3(signature = (netting_set, alpha=1.4))]
+fn saccr_exposure(py: Python<'_>, netting_set: &Bound<'_, PyAny>, alpha: f64) -> PyResult<PyObject> {
+    let ns: saccr::NettingSet = serde_json::from_value(from_py(netting_set)?).map_err(err)?;
+    to_py(py, &saccr::exposure(&ns, alpha).map_err(err)?)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -752,5 +762,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(concordance, m)?)?;
     m.add_function(wrap_pyfunction!(realized_ccf, m)?)?;
     m.add_function(wrap_pyfunction!(staging_check, m)?)?;
+    m.add_function(wrap_pyfunction!(saccr_exposure, m)?)?;
     Ok(())
 }

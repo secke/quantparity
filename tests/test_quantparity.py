@@ -213,3 +213,19 @@ def test_ifrs9():
                           {"reported_stage": 1, "pd_origination": 0.01, "pd_current": 0.03}],
                          {"relative_threshold": 4.0})
     assert s["understaged"] == 1 and s["mismatches"][0]["reasons"] == ["dpd_stage2"] and s["status"] == "fail"
+
+
+def test_saccr_basel_example_1():
+    """BCBS 279, Annex 4, example 1: two USD swaps and a EUR swaption bought; EAD 569."""
+    swap = dict(asset_class="ir", qualifier="USD", notional=10_000)
+    trades = [
+        dict(swap, id="1", long=True, market_value=30, maturity=10),
+        dict(swap, id="2", long=False, market_value=-20, maturity=4),
+        dict(id="3", asset_class="ir", qualifier="EUR", notional=5_000, market_value=50, maturity=11, start=1,
+             option=dict(kind="put", bought=True, price=0.06, strike=0.05, exercise=1)),
+    ]
+    e = qp.saccr_exposure({"id": "ex1", "trades": trades})
+    assert round(e["ead"]) == 569 and round(e["add_on"]) == 347 and e["replacement_cost"] == 60
+    assert abs(e["trades"][2]["delta"] + 0.2694) < 5e-5
+    with pytest.raises(ValueError, match="long"):
+        qp.saccr_exposure({"id": "x", "trades": [dict(swap, id="1", market_value=0, maturity=1)]})

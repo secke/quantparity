@@ -16,6 +16,8 @@
 //! - **IFRS 9 credit**: ECL of a facility from PD curves (flat hazard, empirical, rating migration
 //!   matrices), LGD, exposure profiles and the effective interest rate; LGD and CCF backtests;
 //!   recomputation of the stages from the SICR criteria.
+//! - **Counterparty credit risk**: SA-CCR exposure at default of a netting set (replacement cost,
+//!   add-ons by asset class and hedging set, multiplier, margined and unmargined).
 //!
 //! Every result is checked against QuantLib (and the volatility models against the Python `arch`
 //! package) in the repository's `validation/` suite.
@@ -29,6 +31,7 @@ pub mod garch;
 pub mod ifrs9;
 mod instruments;
 pub mod risk;
+pub mod saccr;
 pub mod stats;
 pub mod validation;
 pub mod var_models;

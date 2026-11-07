@@ -34,6 +34,7 @@ from ._core import (  # noqa: F401
     psi,
     realized_ccf,
     revalue,
+    saccr_exposure,
     sensitivities,
     staging_check,
     stress,

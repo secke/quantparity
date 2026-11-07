@@ -40,6 +40,7 @@ Results of [`validation/validate_quantlib.py`](validation/validate_quantlib.py) 
 | LGD / CCF backtest: concordance (1 + Somers' D) / 2 (`scipy.stats.somersd`) | 12 | 0 |
 | PD calibration: Jeffreys p-value by grade, 30 to 100,000 obligors (`scipy.stats.beta.cdf`) | 16 | 2.2e-11 |
 | IFRS 9 staging from the SICR criteria, 20,000 facilities (the same rules in numpy) | 9 | 0 |
+| SA-CCR: the five worked examples of BCBS 279, Annex 4 (rates, credit, commodities, combined, margined): supervisory durations, deltas, effective notionals, add-ons, multipliers, EAD | 5 netting sets | equal to the published figures at their rounding (EAD 569, 381, 5,406, 936, 1,879) |
 
 The normal quantile gap is QuantLib's: `InverseCumulativeNormal` is Acklam's approximation without a refinement step, accurate to about 1e-9; quantparity refines it and agrees with scipy to 4e-15. Filtered historical simulation and the Acerbi-Székely statistics are recomputed independently in the validation script (gaps of 1e-17 and 2e-15). The volatility models have no QuantLib counterpart and are reconciled with the Python [`arch`](https://github.com/bashtage/arch) package instead, on 36 simulated samples of 500 to 2,500 days.
 
@@ -74,6 +75,7 @@ Replacing only that line in an otherwise identical tree reproduces QuantLib to 9
 | VaR / ES models | One-day forecasts with an EWMA (RiskMetrics), GARCH or GJR volatility, refitted on a rolling or expanding window, and normal, unit-variance Student-t or filtered historical simulation innovations (Barone-Adesi, Hull-White): VaR, ES and the VaR at the ES level |
 | Model validation | Kupiec, Christoffersen, Basel traffic light, Acerbi-Székely Z1 and Z2 expected shortfall backtests with simulated p-values, PSI, AUC / Gini / KS, binomial, Jeffreys and Hosmer-Lemeshow PD calibration, LGD and CCF backtests (one-sided t-test by segment, concordance), IFRS 9 staging check |
 | IFRS 9 credit | ECL of a facility in stage 1, 2 or 3: PD curves (flat hazard, cumulative PDs by year, powers of a rating migration matrix, cohort estimate of the matrix), exposure profiles (bullet, linear, annuity), discounting at the effective interest rate |
+| Counterparty credit risk | SA-CCR exposure at default of a netting set (Basel CRE52): replacement cost, margined or not; supervisory durations, deltas (options, swaptions with shifted rates, CDO tranches) and maturity factors; add-ons of the five asset classes by hedging set, maturity bucket, entity and commodity type; basis and volatility transactions; multiplier; cap at the unmargined EAD |
 
 ## Install
 
@@ -166,6 +168,26 @@ qp.staging_check(records, {"relative_threshold": 2.0, "absolute_threshold": 0.00
 ```
 
 Conventions: a default in period k happens at its end, on the balance outstanding during the period, and is discounted from that date at the effective interest rate; stage 1 takes the defaults of the first 12 months, stages 2 and 3 those of the remaining life; a stage 3 facility loses LGD × EAD. Between two whole years of a PD curve the hazard rate is constant, and after its last year the conditional PD of that year repeats. The staging rules follow IFRS 9: more than 90 days past due or in default is stage 3; more than 30 days past due (5.5.11), a watch list or forbearance flag, or a significant increase of the PD since origination (relative and absolute thresholds, low credit risk exemption of 5.5.10) is stage 2.
+
+### Counterparty credit risk: SA-CCR
+
+```python
+swap = dict(asset_class="ir", qualifier="USD", notional=10_000)
+qp.saccr_exposure({
+    "id": "CPTY_1",
+    "trades": [
+        dict(swap, id="1", long=True, market_value=30, maturity=10),      # pay fixed: long rates
+        dict(swap, id="2", long=False, market_value=-20, maturity=4),
+        dict(id="3", asset_class="ir", qualifier="EUR", notional=5_000, market_value=50, maturity=11, start=1,
+             option=dict(kind="put", bought=True, price=0.06, strike=0.05, exercise=1)),
+    ],
+    "collateral": 0,                                    # haircut net collateral held
+    # "margin": {"threshold": 0, "mta": 5, "nica": 150, "remargin_days": 5},
+})
+# {'ead': 569.0..., 'replacement_cost': 60.0, 'add_on': 346.9..., 'multiplier': 1.0, 'asset_classes': [...], 'trades': [...]}
+```
+
+Each trade gives its asset class (`ir`, `fx`, `credit`, `equity`, `commodity`), its qualifier (currency, currency pair, reference entity or index, commodity type), the notional in the reporting currency, `long` in the primary risk factor (or an `option`), the market value and the maturity M in years; interest rate and credit trades take `start` and `end` (S, E), single names a `rating` (AAA to CCC), indices `index` and `investment_grade`, commodities a `sector` (electricity, oil_gas, metals, agricultural, other). Supervisory factors, correlations and option volatilities are those of CRE52.72; a year has 250 business days for the 10-day maturity floor and the margin period of risk (the floor plus the remargining period minus one day, or `mpor_days`). Interest rate maturity buckets are E < 1 year, 1 ≤ E ≤ 5 and E > 5.
 
 ### Finding: the LGD t-test keeps its level on U-shaped LGDs
 
